@@ -21,7 +21,7 @@ providers:
   file:
     filename: "/etc/traefik/dynamic.yml"
 
-# PRODUCTION SSL CONFIGURATION
+# production SSL CONFIGURATION
 # certificatesResolvers:
 #   myresolver:
 #     acme:
