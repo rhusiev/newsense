@@ -9,8 +9,11 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use axum_csrf::{CsrfConfig, CsrfLayer};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, postgres::PgPoolOptions};
+use std::{net::SocketAddr, time};
+use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
 use tower_sessions::{Expiry, Session, SessionManagerLayer, cookie::time::Duration};
 use tower_sessions_sqlx_store::PostgresStore;
 use uuid::Uuid;
@@ -81,12 +84,32 @@ async fn main() {
 
     let app_state = AppState { db: pool };
 
+    let csrf_config = CsrfConfig::default();
+
+    let governor_config = GovernorConfigBuilder::default()
+        .per_second(5)
+        .burst_size(5)
+        .finish()
+        .unwrap();
+
+    let governor_limiter = governor_config.limiter().clone();
+    tokio::spawn(async move {
+        let interval = time::Duration::from_secs(60);
+        let mut ticker = tokio::time::interval(interval);
+        loop {
+            ticker.tick().await;
+            governor_limiter.retain_recent();
+        }
+    });
+
     let app = Router::new()
         .route("/register", post(register))
         .route("/login", post(login))
         .route("/logout", post(logout))
         .route("/me", get(current_user))
         .layer(session_layer)
+        .layer(GovernorLayer::new(governor_config))
+        .layer(CsrfLayer::new(csrf_config))
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
@@ -95,7 +118,12 @@ async fn main() {
 
     println!("Server running on http://0.0.0.0:3000");
 
-    axum::serve(listener, app).await.expect("Server failed");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("Server failed");
 }
 
 async fn register(
