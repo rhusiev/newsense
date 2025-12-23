@@ -1,0 +1,5 @@
+FROM rust:alpine
+RUN apk add --no-cache musl-dev
+WORKDIR /app
+RUN cargo install cargo-watch
+CMD ["cargo", "watch", "-x", "run"]

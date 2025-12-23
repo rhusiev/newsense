@@ -53,6 +53,23 @@ services:
       - auth_cargo_cache:/usr/local/cargo/registry
       - auth_target_cache:/app/target
 
+  users:
+    build:
+      context: ./users
+      dockerfile: Dockerfile.dev
+    container_name: users
+    restart: unless-stopped
+    networks:
+      - web
+    ports:
+      - 3001:3001
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    volumes:
+      - ./users:/app
+      - users_cargo_cache:/usr/local/cargo/registry
+      - users_target_cache:/app/target
+
 networks:
   web:
     external: false
@@ -61,3 +78,5 @@ volumes:
   postgres_data:
   auth_cargo_cache:
   auth_target_cache:
+  users_cargo_cache:
+  users_target_cache:
