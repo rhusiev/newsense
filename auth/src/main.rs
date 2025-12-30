@@ -1,6 +1,9 @@
 use argon2::{
     Argon2,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+    password_hash::{
+        PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
+        rand_core::{OsRng, RngCore},
+    },
 };
 use axum::{
     Json, Router,
@@ -10,17 +13,24 @@ use axum::{
     routing::{get, post},
 };
 use axum_csrf::{CsrfConfig, CsrfLayer};
+use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sha2::{Digest, Sha256};
+use sqlx::{PgPool, postgres::PgPoolOptions, types::time::OffsetDateTime};
 use std::{net::SocketAddr, time};
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
 use tower_sessions::{Expiry, Session, SessionManagerLayer, cookie::time::Duration};
 use tower_sessions_sqlx_store::PostgresStore;
 use uuid::Uuid;
 
+const REMEMBER_COOKIE_NAME: &str = "remember_me";
+const REMEMBER_DURATION_DAYS: i64 = 30;
+
 #[derive(Clone)]
 struct AppState {
     db: PgPool,
+    is_production: bool,
 }
 
 #[derive(Deserialize)]
@@ -33,6 +43,8 @@ struct RegisterRequest {
 struct LoginRequest {
     username: String,
     password: String,
+    #[serde(default)]
+    remember_me: bool,
 }
 
 #[derive(Serialize)]
@@ -71,6 +83,35 @@ async fn main() {
     .await
     .expect("Failed to create users table");
 
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS remember_tokens (
+            series UUID PRIMARY KEY,
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("Failed to create remember_tokens table");
+
+    let is_dev = cfg!(debug_assertions);
+    let is_production = !is_dev;
+
+    println!(
+        "Server starting in {} mode (Secure Cookies: {})",
+        if is_production {
+            "PRODUCTION"
+        } else {
+            "DEVELOPMENT"
+        },
+        is_production
+    );
+
     let session_store = PostgresStore::new(pool.clone());
     session_store
         .migrate()
@@ -78,12 +119,14 @@ async fn main() {
         .expect("Failed to migrate session store");
 
     let session_layer = SessionManagerLayer::new(session_store)
-        .with_secure(true)
-        .with_same_site(tower_sessions::cookie::SameSite::Strict)
+        .with_secure(is_production)
+        .with_same_site(tower_sessions::cookie::SameSite::Lax)
         .with_expiry(Expiry::OnInactivity(Duration::new(3600, 0)));
 
-    let app_state = AppState { db: pool };
-
+    let app_state = AppState {
+        db: pool,
+        is_production,
+    };
     let csrf_config = CsrfConfig::default();
 
     let governor_config = GovernorConfigBuilder::default()
@@ -126,6 +169,33 @@ async fn main() {
     .expect("Server failed");
 }
 
+fn generate_token_pair() -> (String, String) {
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    let token = BASE64.encode(bytes);
+
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    let hash = BASE64.encode(hasher.finalize());
+
+    (token, hash)
+}
+
+fn build_cookie_value(user_id: Uuid, series: Uuid, token: &str) -> String {
+    format!("{}:{}:{}", user_id, series, token)
+}
+
+fn parse_cookie_value(value: &str) -> Option<(Uuid, Uuid, String)> {
+    let parts: Vec<&str> = value.split(':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let user_id = Uuid::parse_str(parts[0]).ok()?;
+    let series = Uuid::parse_str(parts[1]).ok()?;
+    let token = parts[2].to_string();
+    Some((user_id, series, token))
+}
+
 async fn register(
     State(state): State<AppState>,
     Json(payload): Json<RegisterRequest>,
@@ -138,7 +208,6 @@ async fn register(
             }),
         ));
     }
-
     if payload.password.len() < 8 {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -156,7 +225,7 @@ async fn register(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
-                    error: "Failed to hash password".to_string(),
+                    error: "Hashing failed".to_string(),
                 }),
             )
         })?
@@ -179,12 +248,18 @@ async fn register(
                 username: payload.username,
             }),
         )),
-        Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => Err((
-            StatusCode::CONFLICT,
-            Json(ErrorResponse {
-                error: "Username already exists".to_string(),
-            }),
-        )),
+        Err(e)
+            if e.as_database_error()
+                .map(|x| x.is_unique_violation())
+                .unwrap_or(false) =>
+        {
+            Err((
+                StatusCode::CONFLICT,
+                Json(ErrorResponse {
+                    error: "Username taken".to_string(),
+                }),
+            ))
+        }
         Err(_) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -197,8 +272,9 @@ async fn register(
 async fn login(
     State(state): State<AppState>,
     session: Session,
+    jar: CookieJar,
     Json(payload): Json<LoginRequest>,
-) -> Result<Json<AuthResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<(CookieJar, Json<AuthResponse>), (StatusCode, Json<ErrorResponse>)> {
     let user = sqlx::query_as::<_, (Uuid, String, String)>(
         "SELECT id, username, password_hash FROM users WHERE username = $1",
     )
@@ -209,7 +285,7 @@ async fn login(
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: "Database error".to_string(),
+                error: "DB Error".to_string(),
             }),
         )
     })?;
@@ -218,7 +294,7 @@ async fn login(
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(ErrorResponse {
-                error: "Invalid username or password".to_string(),
+                error: "Invalid credentials".to_string(),
             }),
         ));
     };
@@ -227,20 +303,19 @@ async fn login(
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: "Invalid password hash in database".to_string(),
+                error: "Hash Error".to_string(),
             }),
         )
     })?;
 
-    let argon2 = Argon2::default();
-    if argon2
+    if Argon2::default()
         .verify_password(payload.password.as_bytes(), &parsed_hash)
         .is_err()
     {
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(ErrorResponse {
-                error: "Invalid username or password".to_string(),
+                error: "Invalid credentials".to_string(),
             }),
         ));
     }
@@ -249,40 +324,119 @@ async fn login(
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: "Failed to create session".to_string(),
+                error: "Session creation failed".to_string(),
             }),
         )
     })?;
 
-    Ok(Json(AuthResponse { user_id, username }))
+    let mut response_jar = jar;
+    if payload.remember_me {
+        let series = Uuid::new_v4();
+        let (token, token_hash) = generate_token_pair();
+        let expires_at = OffsetDateTime::now_utc() + Duration::days(REMEMBER_DURATION_DAYS);
+
+        sqlx::query("INSERT INTO remember_tokens (series, user_id, token_hash, expires_at) VALUES ($1, $2, $3, $4)")
+            .bind(series).bind(user_id).bind(token_hash).bind(expires_at)
+            .execute(&state.db).await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: "Failed to set remember token".to_string() })))?;
+
+        let value = build_cookie_value(user_id, series, &token);
+        let mut cookie = Cookie::new(REMEMBER_COOKIE_NAME, value);
+        cookie.set_http_only(true);
+
+        cookie.set_secure(state.is_production);
+
+        cookie.set_same_site(SameSite::Lax);
+        cookie.set_path("/");
+        cookie.set_max_age(Duration::days(REMEMBER_DURATION_DAYS));
+
+        response_jar = response_jar.add(cookie);
+    }
+
+    Ok((response_jar, Json(AuthResponse { user_id, username })))
 }
 
-async fn logout(session: Session) -> impl IntoResponse {
-    session.delete().await.ok();
-    StatusCode::NO_CONTENT
+async fn logout(
+    State(state): State<AppState>,
+    session: Session,
+    jar: CookieJar,
+) -> impl IntoResponse {
+    let _ = session.delete().await;
+
+    let mut response_jar = jar;
+
+    if let Some(cookie) = response_jar.get(REMEMBER_COOKIE_NAME) {
+        if let Some((_, series, _)) = parse_cookie_value(cookie.value()) {
+            let _ = sqlx::query("DELETE FROM remember_tokens WHERE series = $1")
+                .bind(series)
+                .execute(&state.db)
+                .await;
+        }
+        response_jar = response_jar.remove(Cookie::from(REMEMBER_COOKIE_NAME));
+    }
+
+    (response_jar, StatusCode::NO_CONTENT)
 }
 
 async fn current_user(
     State(state): State<AppState>,
     session: Session,
-) -> Result<Json<AuthResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let user_id: Uuid = session
-        .get("user_id")
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Session error".to_string(),
-                }),
-            )
-        })?
-        .ok_or((
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse {
-                error: "Not authenticated".to_string(),
-            }),
-        ))?;
+    jar: CookieJar,
+) -> Result<(CookieJar, Json<AuthResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let mut response_jar = jar.clone();
+
+    let mut maybe_user_id: Option<Uuid> = session.get("user_id").await.ok().flatten();
+
+    if maybe_user_id.is_none() {
+        if let Some(cookie) = response_jar.get(REMEMBER_COOKIE_NAME) {
+            if let Some((user_id, series, token)) = parse_cookie_value(cookie.value()) {
+                if let Ok(Some((db_hash, db_uid, expires))) = sqlx::query_as::<
+                    _,
+                    (String, Uuid, OffsetDateTime),
+                >(
+                    "SELECT token_hash, user_id, expires_at FROM remember_tokens WHERE series = $1",
+                )
+                .bind(series)
+                .fetch_optional(&state.db)
+                .await
+                {
+                    let mut hasher = Sha256::new();
+                    hasher.update(token.as_bytes());
+                    let incoming_hash = BASE64.encode(hasher.finalize());
+
+                    if db_uid == user_id
+                        && incoming_hash == db_hash
+                        && OffsetDateTime::now_utc() < expires
+                    {
+                        let (new_token, new_hash) = generate_token_pair();
+
+                        sqlx::query("UPDATE remember_tokens SET token_hash = $1, last_used_at = NOW() WHERE series = $2")
+                            .bind(new_hash).bind(series).execute(&state.db).await.ok();
+
+                        session.insert("user_id", user_id).await.ok();
+                        maybe_user_id = Some(user_id);
+
+                        let value = build_cookie_value(user_id, series, &new_token);
+                        let mut c = Cookie::new(REMEMBER_COOKIE_NAME, value);
+                        c.set_http_only(true);
+
+                        c.set_secure(state.is_production);
+
+                        c.set_path("/");
+                        c.set_max_age(Duration::days(REMEMBER_DURATION_DAYS));
+                        response_jar = response_jar.add(c);
+                    }
+                }
+            }
+        }
+    }
+
+    let user_id = maybe_user_id.ok_or((
+        StatusCode::UNAUTHORIZED,
+        Json(ErrorResponse {
+            error: "Not authenticated".to_string(),
+        }),
+    ))?;
 
     let user = sqlx::query_as::<_, (Uuid, String)>("SELECT id, username FROM users WHERE id = $1")
         .bind(user_id)
@@ -292,7 +446,7 @@ async fn current_user(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
-                    error: "Database error".to_string(),
+                    error: "DB Error".to_string(),
                 }),
             )
         })?
@@ -303,8 +457,11 @@ async fn current_user(
             }),
         ))?;
 
-    Ok(Json(AuthResponse {
-        user_id: user.0,
-        username: user.1,
-    }))
+    Ok((
+        response_jar,
+        Json(AuthResponse {
+            user_id: user.0,
+            username: user.1,
+        }),
+    ))
 }
