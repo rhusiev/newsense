@@ -8,6 +8,15 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS remember_tokens (
+    series UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+
 CREATE TABLE IF NOT EXISTS feeds (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     owner_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -38,6 +47,14 @@ CREATE TABLE IF NOT EXISTS items (
     CONSTRAINT unique_item_per_feed UNIQUE (feed_id, link)
 );
 
+CREATE TABLE IF NOT EXISTS item_reads (
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    item_id UUID REFERENCES items(id) ON DELETE CASCADE,
+    is_read BOOLEAN NOT NULL DEFAULT true,
+    marked_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, item_id)
+);
+
 CREATE TABLE IF NOT EXISTS feed_subscriptions (
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     feed_id UUID REFERENCES feeds(id) ON DELETE CASCADE,
@@ -66,6 +83,8 @@ CREATE TABLE IF NOT EXISTS rule_subscriptions (
 );
 
 -- For performance
+CREATE INDEX idx_item_reads_user_id ON item_reads(user_id);
+CREATE INDEX idx_item_reads_item_id ON item_reads(item_id);
 CREATE INDEX idx_items_published ON items(published_at DESC);
 CREATE INDEX idx_items_feed_id ON items(feed_id);
 CREATE INDEX idx_feed_subscriptions_user_id ON feed_subscriptions(user_id);

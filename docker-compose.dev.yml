@@ -35,6 +35,18 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    networks:
+      - web
+    depends_on:
+      - db
 
   auth:
     build:
@@ -70,6 +82,24 @@ services:
       - users_cargo_cache:/usr/local/cargo/registry
       - users_target_cache:/app/target
 
+  aggregator:
+    build:
+      context: ./aggregator
+      dockerfile: Dockerfile.dev
+    container_name: aggregator
+    restart: unless-stopped
+    networks:
+      - web
+    ports:
+      - 3002:3002
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    volumes:
+      - ./aggregator:/app
+      - aggregator_cargo_cache:/usr/local/cargo/registry
+      - aggregator_target_cache:/app/target
+
+
   fetcher:
     build:
       context: ./fetcher
@@ -97,5 +127,7 @@ volumes:
   auth_target_cache:
   users_cargo_cache:
   users_target_cache:
+  aggregator_cargo_cache:
+  aggregator_target_cache:
   fetcher_cargo_cache:
   fetcher_target_cache:
