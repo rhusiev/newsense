@@ -70,6 +70,22 @@ services:
       - users_cargo_cache:/usr/local/cargo/registry
       - users_target_cache:/app/target
 
+  fetcher:
+    build:
+      context: ./fetcher
+      dockerfile: Dockerfile.dev
+    container_name: fetcher
+    restart: unless-stopped
+    networks:
+      - web
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      RUST_LOG: info
+    volumes:
+      - ./fetcher:/app
+      - fetcher_cargo_cache:/usr/local/cargo/registry
+      - fetcher_target_cache:/app/target
+
 networks:
   web:
     external: false
@@ -80,3 +96,5 @@ volumes:
   auth_target_cache:
   users_cargo_cache:
   users_target_cache:
+  fetcher_cargo_cache:
+  fetcher_target_cache:

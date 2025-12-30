@@ -56,6 +56,12 @@ struct ErrorResponse {
     error: String,
 }
 
+#[derive(Serialize)]
+struct SubscriberCountResponse {
+    feed_id: Uuid,
+    subscriber_count: i64,
+}
+
 struct AuthUser(Uuid);
 
 impl<S> FromRequestParts<S> for AuthUser
@@ -121,10 +127,14 @@ async fn main() {
 
     let app = Router::new()
         .route("/feeds", post(add_feed))
-        .route("/feeds", get(list_feeds))
         .route("/feeds/{id}", put(update_feed))
+        .route("/feeds/{id}", get(get_feed))
         .route("/feeds/{id}", delete(delete_feed))
         .route("/feeds/{id}/subscription", post(subscribe_feed))
+        .route("/feeds/{id}/subscription", delete(unsubscribe_feed))
+        .route("/feeds/{id}/subscribers/count", get(get_feed_subscriber_count))
+        .route("/feeds/owned", get(list_owned_feeds))
+        .route("/feeds/subscribed", get(list_subscribed_feeds))
         .layer(session_layer)
         .with_state(app_state);
 
@@ -201,7 +211,7 @@ async fn add_feed(
     Ok((StatusCode::CREATED, Json(feed)))
 }
 
-async fn list_feeds(
+async fn list_subscribed_feeds(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
 ) -> Result<Json<Vec<FeedResponse>>, (StatusCode, Json<ErrorResponse>)> {
@@ -228,6 +238,66 @@ async fn list_feeds(
     })?;
 
     Ok(Json(feeds))
+}
+
+async fn list_owned_feeds(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+) -> Result<Json<Vec<FeedResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let feeds = sqlx::query_as!(
+        FeedResponse,
+        r#"
+        SELECT id, owner_id, url, title, description, is_public, created_at
+        FROM feeds
+        WHERE owner_id = $1
+        ORDER BY created_at DESC
+        "#,
+        user_id
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
+
+    Ok(Json(feeds))
+}
+
+async fn get_feed_subscriber_count(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path(feed_id): Path<Uuid>,
+) -> Result<Json<SubscriberCountResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let feed = sqlx::query!(
+        "SELECT owner_id, is_public FROM feeds WHERE id = $1",
+        feed_id
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
+
+    let feed_record = feed.ok_or((
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse { error: "Feed not found".to_string() }),
+    ))?;
+
+    if feed_record.owner_id != Some(user_id) && feed_record.is_public != Some(true) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse { error: "Access denied".to_string() }),
+        ));
+    }
+
+    let count = sqlx::query!(
+        "SELECT COUNT(*) as count FROM feed_subscriptions WHERE feed_id = $1",
+        feed_id
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
+
+    Ok(Json(SubscriberCountResponse {
+        feed_id,
+        subscriber_count: count.count.unwrap_or(0),
+    }))
 }
 
 async fn update_feed(
@@ -297,6 +367,54 @@ async fn update_feed(
     })?;
 
     Ok(Json(updated_feed))
+}
+
+async fn get_feed(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path(feed_id): Path<Uuid>,
+) -> Result<Json<FeedResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let feed = sqlx::query_as!(
+        FeedResponse,
+        r#"
+        SELECT id, owner_id, url, title, description, is_public, created_at
+        FROM feeds WHERE id = $1
+        "#,
+        feed_id,
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    let feed_record = match feed {
+        Some(f) => f,
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Feed not found".to_string(),
+                }),
+            ));
+        }
+    };
+
+    if feed_record.owner_id != Some(user_id) && feed_record.is_public != Some(true) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "You can't access this feed".to_string(),
+            }),
+        ));
+    }
+
+    Ok(Json(feed_record))
 }
 
 async fn delete_feed(
@@ -452,4 +570,73 @@ async fn subscribe_feed(
     };
 
     Ok((StatusCode::CREATED, Json(subscription)))
+}
+
+async fn unsubscribe_feed(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path(feed_id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let feed = sqlx::query_as!(
+        FeedResponse,
+        r#"
+        SELECT id, owner_id, url, title, description, is_public, created_at
+        FROM feeds WHERE id = $1
+        "#,
+        feed_id,
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    let feed_record = match feed {
+        Some(f) => f,
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Feed not found".to_string(),
+                }),
+            ));
+        }
+    };
+
+    if feed_record.owner_id != Some(user_id) && feed_record.is_public != Some(true) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "You can't access this feed".to_string(),
+            }),
+        ));
+    }
+
+    let result = sqlx::query!("DELETE FROM feed_subscriptions WHERE user_id = $1 AND feed_id = $2", user_id, feed_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+
+    if result.rows_affected() == 0 {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Subscription not found".to_string(),
+            }),
+        ));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
