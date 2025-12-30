@@ -1,6 +1,6 @@
 use axum::{
     Json, RequestPartsExt, Router,
-    extract::{FromRequestParts, Path, State},
+    extract::{FromRequestParts, Path, State, Query},
     http::{StatusCode, request::Parts},
     routing::{delete, get, post, put},
 };
@@ -62,6 +62,11 @@ struct SubscriberCountResponse {
     subscriber_count: i64,
 }
 
+#[derive(Deserialize)]
+struct SearchParams {
+    q: String,
+}
+
 struct AuthUser(Uuid);
 
 impl<S> FromRequestParts<S> for AuthUser
@@ -118,9 +123,17 @@ async fn main() {
         .await
         .expect("Failed to migrate store");
 
+    let is_dev = cfg!(debug_assertions);
+    let is_production = !is_dev;
+
+    println!("Users Service running in {} mode (Secure Cookies: {})", 
+        if is_production { "PRODUCTION" } else { "DEVELOPMENT" },
+        is_production
+    );
+
     let session_layer = SessionManagerLayer::new(session_store)
-        .with_secure(true)
-        .with_same_site(tower_sessions::cookie::SameSite::Strict)
+        .with_secure(is_production)
+        .with_same_site(tower_sessions::cookie::SameSite::Lax)
         .with_expiry(Expiry::OnInactivity(Duration::new(3600, 0)));
 
     let app_state = AppState { db: pool };
@@ -135,6 +148,7 @@ async fn main() {
         .route("/feeds/{id}/subscribers/count", get(get_feed_subscriber_count))
         .route("/feeds/owned", get(list_owned_feeds))
         .route("/feeds/subscribed", get(list_subscribed_feeds))
+        .route("/feeds/search", get(search_public_feeds))
         .layer(session_layer)
         .with_state(app_state);
 
@@ -142,7 +156,7 @@ async fn main() {
         .await
         .expect("Failed to bind");
 
-    println!("Users/Feeds Service running on http://0.0.0.0:3001");
+    println!("Users Service running on http://0.0.0.0:3001");
 
     axum::serve(
         listener,
@@ -639,4 +653,37 @@ async fn unsubscribe_feed(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn search_public_feeds(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Query(params): Query<SearchParams>,
+) -> Result<Json<Vec<FeedResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let search_pattern = format!("%{}%", params.q);
+
+    let feeds = sqlx::query_as!(
+        FeedResponse,
+        r#"
+        SELECT id, owner_id, url, title, description, is_public, created_at
+        FROM feeds
+        WHERE is_public = true 
+          AND (title ILIKE $1 OR description ILIKE $1 OR url ILIKE $1)
+        ORDER BY created_at DESC
+        LIMIT 50
+        "#,
+        search_pattern
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    Ok(Json(feeds))
 }
