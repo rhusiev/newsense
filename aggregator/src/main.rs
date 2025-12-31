@@ -204,7 +204,7 @@ async fn get_feed_items(
         FROM items i
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
         WHERE i.feed_id = $2 AND i.published_at > $3
-        ORDER BY i.published_at DESC
+        ORDER BY i.published_at ASC
         LIMIT $4
         "#,
             user_id,
@@ -267,7 +267,7 @@ async fn get_all_items(
         LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
         WHERE (f.owner_id = $1 OR fs.user_id = $1) AND i.published_at > $2
-        ORDER BY i.published_at DESC
+        ORDER BY i.published_at ASC
         LIMIT $3
         "#,
             user_id,
