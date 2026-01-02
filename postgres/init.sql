@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS item_reads (
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     item_id UUID REFERENCES items(id) ON DELETE CASCADE,
     is_read BOOLEAN NOT NULL DEFAULT true,
+    liked REAL DEFAULT 0 CHECK (liked >= -1 AND liked <= 1),
     marked_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, item_id)
 );

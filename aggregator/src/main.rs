@@ -23,8 +23,9 @@ struct GetItemsQuery {
 }
 
 #[derive(Deserialize)]
-struct MarkReadRequest {
-    is_read: bool,
+struct UpdateItemStatusRequest {
+    is_read: Option<bool>,
+    liked: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -41,6 +42,7 @@ struct ItemResponse {
     #[serde(with = "time::serde::iso8601::option")]
     created_at: Option<time::OffsetDateTime>,
     is_read: Option<bool>,
+    liked: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -48,6 +50,7 @@ struct ReadStatusResponse {
     user_id: Uuid,
     item_id: Uuid,
     is_read: bool,
+    liked: f32,
     #[serde(with = "time::serde::iso8601::option")]
     marked_at: Option<time::OffsetDateTime>,
 }
@@ -136,7 +139,7 @@ async fn main() {
     let app = Router::new()
         .route("/feeds/{feed_id}/items", get(get_feed_items))
         .route("/items", get(get_all_items))
-        .route("/items/{item_id}/read", put(mark_item_read))
+        .route("/items/{item_id}/status", put(update_item_status))
         .layer(session_layer)
         .with_state(app_state);
 
@@ -197,16 +200,17 @@ async fn get_feed_items(
         sqlx::query_as!(
             ItemResponse,
             r#"
-        SELECT
-            i.id as "id!", i.feed_id as "feed_id!", i.title, i.link, i.content, i.author,
-            i.published_at, i.cluster_id, i.created_at,
-            ir.is_read as "is_read?"
-        FROM items i
-        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
-        WHERE i.feed_id = $2 AND i.published_at > $3
-        ORDER BY i.published_at ASC
-        LIMIT $4
-        "#,
+            SELECT
+                i.id as "id!", i.feed_id as "feed_id!", i.title, i.link, i.content, i.author,
+                i.published_at, i.cluster_id, i.created_at,
+                ir.is_read as "is_read?",
+                ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
+            FROM items i
+            LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+            WHERE i.feed_id = $2 AND i.published_at > $3
+            ORDER BY i.published_at ASC
+            LIMIT $4
+            "#,
             user_id,
             feed_id,
             since,
@@ -218,16 +222,17 @@ async fn get_feed_items(
         sqlx::query_as!(
             ItemResponse,
             r#"
-        SELECT
-            i.id as "id!", i.feed_id as "feed_id!", i.title, i.link, i.content, i.author,
-            i.published_at, i.cluster_id, i.created_at,
-            ir.is_read as "is_read?"
-        FROM items i
-        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
-        WHERE i.feed_id = $2
-        ORDER BY i.published_at DESC
-        LIMIT $3
-        "#,
+            SELECT
+                i.id as "id!", i.feed_id as "feed_id!", i.title, i.link, i.content, i.author,
+                i.published_at, i.cluster_id, i.created_at,
+                ir.is_read as "is_read?",
+                ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
+            FROM items i
+            LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+            WHERE i.feed_id = $2
+            ORDER BY i.published_at DESC
+            LIMIT $3
+            "#,
             user_id,
             feed_id,
             limit
@@ -254,36 +259,14 @@ async fn get_all_items(
 ) -> Result<Json<Vec<ItemResponse>>, (StatusCode, Json<ErrorResponse>)> {
     let limit = params.limit.unwrap_or(50).min(1000);
 
-    let items = if let Some(since) = params.since {
-        sqlx::query_as!(
-            ItemResponse,
-            r#"
+    let items = sqlx::query_as!(
+        ItemResponse,
+        r#"
         SELECT
             i.id as "id!", i.feed_id as "feed_id!", i.title, i.link, i.content, i.author,
             i.published_at, i.cluster_id, i.created_at,
-            ir.is_read as "is_read?"
-        FROM items i
-        INNER JOIN feeds f ON i.feed_id = f.id
-        LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
-        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
-        WHERE (f.owner_id = $1 OR fs.user_id = $1) AND i.published_at > $2
-        ORDER BY i.published_at ASC
-        LIMIT $3
-        "#,
-            user_id,
-            since,
-            limit
-        )
-        .fetch_all(&state.db)
-        .await
-    } else {
-        sqlx::query_as!(
-            ItemResponse,
-            r#"
-        SELECT
-            i.id as "id!", i.feed_id as "feed_id!", i.title, i.link, i.content, i.author,
-            i.published_at, i.cluster_id, i.created_at,
-            ir.is_read as "is_read?"
+            ir.is_read as "is_read?",
+            ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
         FROM items i
         INNER JOIN feeds f ON i.feed_id = f.id
         LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
@@ -292,30 +275,23 @@ async fn get_all_items(
         ORDER BY i.published_at DESC
         LIMIT $2
         "#,
-            user_id,
-            limit
-        )
-        .fetch_all(&state.db)
-        .await
-    }
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+        user_id,
+        limit
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
     Ok(Json(items))
 }
 
-async fn mark_item_read(
+async fn update_item_status(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
     Path(item_id): Path<Uuid>,
-    Json(payload): Json<MarkReadRequest>,
+    Json(payload): Json<UpdateItemStatusRequest>,
 ) -> Result<Json<ReadStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // 1. Access Check (Explicitly typed for safety)
     let has_access = sqlx::query!(
         r#"
         SELECT EXISTS(
@@ -330,47 +306,42 @@ async fn mark_item_read(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    .map_err(|e: sqlx::Error| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
     if !has_access.has_access {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: "Access denied to this item".to_string(),
-            }),
-        ));
+        return Err((StatusCode::FORBIDDEN, Json(ErrorResponse { error: "Access denied".into() })));
     }
 
-    let read_status = sqlx::query_as!(
+    // 2. The UPSERT with Explicit Type Casting
+    // We cast $3 to BOOLEAN and $4 to REAL so SQLx knows how to bind payload fields
+    let status = sqlx::query_as!(
         ReadStatusResponse,
         r#"
-        INSERT INTO item_reads (user_id, item_id, is_read)
-        VALUES ($1, $2, $3)
+        INSERT INTO item_reads (user_id, item_id, is_read, liked)
+        VALUES ($1, $2, COALESCE($3::BOOLEAN, true), COALESCE($4::REAL, 0.0))
         ON CONFLICT (user_id, item_id)
-        DO UPDATE SET is_read = $3, marked_at = CURRENT_TIMESTAMP
-        RETURNING user_id, item_id, is_read, marked_at
+        DO UPDATE SET 
+            is_read = COALESCE($3::BOOLEAN, item_reads.is_read), 
+            liked = COALESCE($4::REAL, item_reads.liked),
+            marked_at = CURRENT_TIMESTAMP
+        RETURNING 
+            user_id, 
+            item_id, 
+            is_read, 
+            ROUND(liked)::REAL as "liked!", 
+            marked_at
         "#,
         user_id,
         item_id,
-        payload.is_read
+        payload.is_read, // Option<bool> maps to BOOLEAN
+        payload.liked    // Option<f32> maps to REAL
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    .map_err(|e: sqlx::Error| ( // Added explicit type to error to solve inference
+        StatusCode::INTERNAL_SERVER_ERROR, 
+        Json(ErrorResponse { error: e.to_string() })
+    ))?;
 
-    Ok(Json(read_status))
+    Ok(Json(status))
 }
