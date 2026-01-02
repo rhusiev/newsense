@@ -1,6 +1,6 @@
 use axum::{
     Json, RequestPartsExt, Router,
-    extract::{FromRequestParts, Path, State, Query},
+    extract::{FromRequestParts, Path, Query, State},
     http::{StatusCode, request::Parts},
     routing::{delete, get, post, put},
 };
@@ -14,6 +14,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 struct AppState {
     db: PgPool,
+    http_client: reqwest::Client,
 }
 
 #[derive(Deserialize)]
@@ -126,8 +127,13 @@ async fn main() {
     let is_dev = cfg!(debug_assertions);
     let is_production = !is_dev;
 
-    println!("Users Service running in {} mode (Secure Cookies: {})", 
-        if is_production { "PRODUCTION" } else { "DEVELOPMENT" },
+    println!(
+        "Users Service running in {} mode (Secure Cookies: {})",
+        if is_production {
+            "PRODUCTION"
+        } else {
+            "DEVELOPMENT"
+        },
         is_production
     );
 
@@ -136,7 +142,10 @@ async fn main() {
         .with_same_site(tower_sessions::cookie::SameSite::Lax)
         .with_expiry(Expiry::OnInactivity(Duration::new(3600, 0)));
 
-    let app_state = AppState { db: pool };
+    let app_state = AppState {
+        db: pool,
+        http_client: reqwest::Client::new(),
+    };
 
     let app = Router::new()
         .route("/feeds", post(add_feed))
@@ -145,7 +154,10 @@ async fn main() {
         .route("/feeds/{id}", delete(delete_feed))
         .route("/feeds/{id}/subscription", post(subscribe_feed))
         .route("/feeds/{id}/subscription", delete(unsubscribe_feed))
-        .route("/feeds/{id}/subscribers/count", get(get_feed_subscriber_count))
+        .route(
+            "/feeds/{id}/subscribers/count",
+            get(get_feed_subscriber_count),
+        )
         .route("/feeds/owned", get(list_owned_feeds))
         .route("/feeds/subscribed", get(list_subscribed_feeds))
         .route("/feeds/search", get(search_public_feeds))
@@ -191,8 +203,8 @@ async fn add_feed(
         )
     })?;
 
-    let feed = match existing_feed {
-        Some(f) => f,
+    let (feed, is_new) = match existing_feed {
+        Some(f) => (f, false),
         None => {
             let new_feed = sqlx::query_as!(
                 FeedResponse,
@@ -218,9 +230,30 @@ async fn add_feed(
                 )
             })?;
 
-            new_feed
+            (new_feed, true)
         }
     };
+
+    if is_new {
+        let client = state.http_client.clone();
+        let feed_id = feed.id;
+
+        tokio::spawn(async move {
+            let url = format!("http://fetcher:3003/feeds/{}/refresh", feed_id);
+            match client.post(&url).send().await {
+                Ok(res) => {
+                    if !res.status().is_success() {
+                        eprintln!(
+                            "Fetcher returned error for feed {}: {}",
+                            feed_id,
+                            res.status()
+                        );
+                    }
+                }
+                Err(e) => eprintln!("Failed to connect to fetcher for feed {}: {}", feed_id, e),
+            }
+        });
+    }
 
     Ok((StatusCode::CREATED, Json(feed)))
 }
@@ -270,7 +303,14 @@ async fn list_owned_feeds(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
 
     Ok(Json(feeds))
 }
@@ -286,17 +326,28 @@ async fn get_feed_subscriber_count(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
 
     let feed_record = feed.ok_or((
         StatusCode::NOT_FOUND,
-        Json(ErrorResponse { error: "Feed not found".to_string() }),
+        Json(ErrorResponse {
+            error: "Feed not found".to_string(),
+        }),
     ))?;
 
     if feed_record.owner_id != Some(user_id) && feed_record.is_public != Some(true) {
         return Err((
             StatusCode::FORBIDDEN,
-            Json(ErrorResponse { error: "Access denied".to_string() }),
+            Json(ErrorResponse {
+                error: "Access denied".to_string(),
+            }),
         ));
     }
 
@@ -306,7 +357,14 @@ async fn get_feed_subscriber_count(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
 
     Ok(Json(SubscriberCountResponse {
         feed_id,
@@ -631,17 +689,21 @@ async fn unsubscribe_feed(
         ));
     }
 
-    let result = sqlx::query!("DELETE FROM feed_subscriptions WHERE user_id = $1 AND feed_id = $2", user_id, feed_id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-        })?;
+    let result = sqlx::query!(
+        "DELETE FROM feed_subscriptions WHERE user_id = $1 AND feed_id = $2",
+        user_id,
+        feed_id
+    )
+    .execute(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
 
     if result.rows_affected() == 0 {
         return Err((
@@ -667,7 +729,7 @@ async fn search_public_feeds(
         r#"
         SELECT id, owner_id, url, title, description, is_public, created_at
         FROM feeds
-        WHERE is_public = true 
+        WHERE is_public = true
           AND (title ILIKE $1 OR description ILIKE $1 OR url ILIKE $1)
         ORDER BY created_at DESC
         LIMIT 50
