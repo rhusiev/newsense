@@ -162,7 +162,6 @@ async fn process_single_feed(
     client: &reqwest::Client,
     feed_id: Uuid,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // 1. Get the feed info
     let feed_info = sqlx::query_as!(
         FeedToFetch,
         "SELECT id, url, last_fetched_at FROM feeds WHERE id = $1",
@@ -181,7 +180,6 @@ async fn process_single_feed(
 
     info!("Worker processing: {}", feed_info.url);
 
-    // 2. Define the core logic in a block/closure so we can catch errors
     let processing_result = async {
         let response = client
             .get(&feed_info.url)
@@ -222,10 +220,8 @@ async fn process_single_feed(
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     }.await;
 
-    // 3. Handle result: Update DB status based on success or failure
     match processing_result {
         Ok(_) => {
-            // Success: Reset error_count and update last_fetched_at
             sqlx::query!(
                 "UPDATE feeds SET last_fetched_at = $1, error_count = 0 WHERE id = $2",
                 Utc::now(),
@@ -236,7 +232,6 @@ async fn process_single_feed(
             Ok(())
         }
         Err(e) => {
-            // Failure: Increment error_count
             error!("Error fetching feed {}: {}", feed_info.url, e);
             
             sqlx::query!(
