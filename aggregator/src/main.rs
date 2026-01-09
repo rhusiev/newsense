@@ -360,7 +360,7 @@ async fn get_all_items(
                 INNER JOIN feeds f ON i.feed_id = f.id
                 LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
-                WHERE (f.owner_id = $1 OR fs.user_id = $1) AND i.published_at < $2
+                WHERE fs.user_id = $1 AND i.published_at < $2
                 ORDER BY i.published_at DESC
                 LIMIT $3
                 "#,
@@ -384,8 +384,7 @@ async fn get_all_items(
                 INNER JOIN feeds f ON i.feed_id = f.id
                 LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
-                WHERE (f.owner_id = $1 OR fs.user_id = $1) 
-                  AND (ir.is_read IS NULL OR ir.is_read = false)
+                WHERE fs.user_id = $1 AND (ir.is_read IS NULL OR ir.is_read = false)
                 ORDER BY i.published_at DESC
                 LIMIT $2
                 "#,
@@ -408,7 +407,7 @@ async fn get_all_items(
                 INNER JOIN feeds f ON i.feed_id = f.id
                 LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
-                WHERE f.owner_id = $1 OR fs.user_id = $1
+                WHERE fs.user_id = $1
                 ORDER BY i.published_at DESC
                 LIMIT $2
                 "#,
