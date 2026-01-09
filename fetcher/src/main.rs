@@ -1,16 +1,16 @@
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::post,
-    Json, Router,
 };
 use chrono::{DateTime, Utc};
 use feed_rs::parser;
 use log::{error, info, warn};
 use serde::Serialize;
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{Semaphore, mpsc};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -20,7 +20,7 @@ struct AppState {
 }
 
 #[derive(Clone)]
-struct FeedToFetch {
+struct SourceToFetch {
     id: Uuid,
     url: String,
     last_fetched_at: Option<DateTime<Utc>>,
@@ -62,7 +62,7 @@ async fn main() {
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3003));
     info!("Fetcher API running on http://{}", addr);
-    
+
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
@@ -77,15 +77,24 @@ async fn trigger_refresh(
     State(state): State<AppState>,
     Path(feed_id): Path<Uuid>,
 ) -> Result<Json<MessageResponse>, (StatusCode, String)> {
-    match state.queue_tx.send(feed_id).await {
-        Ok(_) => Ok(Json(MessageResponse {
-            message: "Feed queued for refresh".to_string(),
-            feed_id,
-        })),
-        Err(_) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Worker queue is closed".to_string(),
-        )),
+    let record = sqlx::query!("SELECT source_id FROM feeds WHERE id = $1", feed_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if let Some(r) = record {
+        match state.queue_tx.send(r.source_id).await {
+            Ok(_) => Ok(Json(MessageResponse {
+                message: "Source queued for refresh".to_string(),
+                feed_id,
+            })),
+            Err(_) => Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Worker queue is closed".to_string(),
+            )),
+        }
+    } else {
+        Err((StatusCode::NOT_FOUND, "Feed not found".to_string()))
     }
 }
 
@@ -98,13 +107,13 @@ async fn scheduler_task(pool: PgPool, tx: mpsc::Sender<Uuid>) {
     info!("Scheduler started. Interval: {}s", fetch_interval_secs);
 
     loop {
-        let feeds = sqlx::query!(
+        let sources = sqlx::query!(
             r#"
             SELECT id
-            FROM feeds
+            FROM sources
             WHERE error_count < 5
               AND (
-                  last_fetched_at IS NULL 
+                  last_fetched_at IS NULL
                   OR last_fetched_at < NOW() - make_interval(secs => $1)
               )
             LIMIT 100
@@ -114,10 +123,10 @@ async fn scheduler_task(pool: PgPool, tx: mpsc::Sender<Uuid>) {
         .fetch_all(&pool)
         .await;
 
-        match feeds {
+        match sources {
             Ok(rows) => {
                 if !rows.is_empty() {
-                    info!("Scheduler: Queueing {} feeds for update", rows.len());
+                    info!("Scheduler: Queueing {} sources for update", rows.len());
                     for row in rows {
                         if let Err(e) = tx.send(row.id).await {
                             error!("Scheduler failed to send to queue: {}", e);
@@ -133,11 +142,7 @@ async fn scheduler_task(pool: PgPool, tx: mpsc::Sender<Uuid>) {
     }
 }
 
-async fn worker_task(
-    pool: PgPool, 
-    http_client: reqwest::Client, 
-    mut rx: mpsc::Receiver<Uuid>
-) {
+async fn worker_task(pool: PgPool, http_client: reqwest::Client, mut rx: mpsc::Receiver<Uuid>) {
     let semaphore = Arc::new(Semaphore::new(5));
 
     info!("Worker started. Waiting for jobs...");
@@ -148,8 +153,8 @@ async fn worker_task(
         let permit = semaphore.clone().acquire_owned().await.unwrap();
 
         tokio::spawn(async move {
-            let _permit = permit; 
-            
+            let _permit = permit;
+
             if let Err(e) = process_single_feed(&pool, &client, feed_id).await {
                 error!("Failed to process feed {}: {}", feed_id, e);
             }
@@ -160,29 +165,29 @@ async fn worker_task(
 async fn process_single_feed(
     pool: &PgPool,
     client: &reqwest::Client,
-    feed_id: Uuid,
+    source_id: Uuid,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let feed_info = sqlx::query_as!(
-        FeedToFetch,
-        "SELECT id, url, last_fetched_at FROM feeds WHERE id = $1",
-        feed_id
+    let source_info = sqlx::query_as!(
+        SourceToFetch,
+        "SELECT id, url, last_fetched_at FROM sources WHERE id = $1",
+        source_id
     )
     .fetch_optional(pool)
     .await?;
 
-    let feed_info = match feed_info {
+    let source_info = match source_info {
         Some(f) => f,
         None => {
-            warn!("Worker received unknown feed_id: {}", feed_id);
+            warn!("Worker received unknown source_id: {}", source_id);
             return Ok(());
         }
     };
 
-    info!("Worker processing: {}", feed_info.url);
+    info!("Worker processing: {}", source_info.url);
 
     let processing_result = async {
         let response = client
-            .get(&feed_info.url)
+            .get(&source_info.url)
             .header("Accept", "*/*")
             .header("Connection", "close")
             .send()
@@ -197,50 +202,65 @@ async fn process_single_feed(
         .await??;
 
         for entry in feed.entries {
-            let title = entry.title.map(|t| t.content).unwrap_or_else(|| "Untitled".to_string());
-            let link = entry.links.first().map(|l| l.href.clone()).unwrap_or_default();
-            if link.is_empty() { continue; }
+            let title = entry
+                .title
+                .map(|t| t.content)
+                .unwrap_or_else(|| "Untitled".to_string());
+            let link = entry
+                .links
+                .first()
+                .map(|l| l.href.clone())
+                .unwrap_or_default();
+            if link.is_empty() {
+                continue;
+            }
 
-            let content = entry.summary.map(|t| t.content)
+            let content = entry
+                .summary
+                .map(|t| t.content)
                 .or_else(|| entry.content.and_then(|c| c.body));
             let author = entry.authors.first().map(|a| a.name.clone());
             let published_at = entry.published.or(entry.updated).unwrap_or_else(Utc::now);
 
             sqlx::query!(
                 r#"
-                INSERT INTO items (feed_id, title, link, content, author, published_at)
+                INSERT INTO items (source_id, title, link, content, author, published_at)
                 VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT (feed_id, link) DO NOTHING
+                ON CONFLICT (source_id, link) DO NOTHING
                 "#,
-                feed_info.id, title, link, content, author, published_at,
+                source_info.id,
+                title,
+                link,
+                content,
+                author,
+                published_at,
             )
             .execute(pool)
             .await?;
         }
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-    }.await;
+    }
+    .await;
 
     match processing_result {
         Ok(_) => {
             sqlx::query!(
-                "UPDATE feeds SET last_fetched_at = $1, error_count = 0 WHERE id = $2",
+                "UPDATE sources SET last_fetched_at = $1, error_count = 0 WHERE id = $2",
                 Utc::now(),
-                feed_info.id
+                source_info.id
             )
             .execute(pool)
             .await?;
             Ok(())
         }
         Err(e) => {
-            error!("Error fetching feed {}: {}", feed_info.url, e);
-            
+            error!("Error fetching source {}: {}", source_info.url, e);
             sqlx::query!(
-                "UPDATE feeds SET error_count = error_count + 1 WHERE id = $1",
-                feed_info.id
+                "UPDATE sources SET error_count = error_count + 1 WHERE id = $1",
+                source_info.id
             )
             .execute(pool)
             .await?;
-            
             Err(e)
         }
     }

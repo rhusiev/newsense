@@ -41,7 +41,7 @@ struct MarkAllReadRequest {
 #[derive(Serialize)]
 struct ItemResponse {
     id: Uuid,
-    feed_id: Uuid,
+    feed_ids: Vec<Uuid>,
     title: String,
     link: String,
     content: Option<String>,
@@ -170,7 +170,10 @@ async fn main() {
 
     let app = Router::new()
         .route("/feeds/{feed_id}/items", get(get_feed_items))
-        .route("/feeds/{feed_id}/items/mark-read", post(mark_feed_items_read))
+        .route(
+            "/feeds/{feed_id}/items/mark-read",
+            post(mark_feed_items_read),
+        )
         .route("/feeds/{feed_id}/unread-count", get(get_feed_unread_count))
         .route("/items", get(get_all_items))
         .route("/items/mark-read", post(mark_all_items_read))
@@ -226,7 +229,7 @@ async fn get_feed_items(
         return Err((
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
-                error: "Access denied to this feed".to_string(),
+                error: "Access denied".into(),
             }),
         ));
     }
@@ -240,13 +243,16 @@ async fn get_feed_items(
                 ItemResponse,
                 r#"
                 SELECT
-                    i.id as "id!", i.feed_id as "feed_id!", i.title, i.link, i.content, i.author,
+                    i.id as "id!",
+                    ARRAY[$2::uuid] as "feed_ids!",
+                    i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
                     ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
                 FROM items i
+                INNER JOIN feeds f ON i.source_id = f.source_id
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
-                WHERE i.feed_id = $2 AND i.published_at > $3
+                WHERE f.id = $2 AND i.published_at > $3
                 ORDER BY i.published_at ASC
                 LIMIT $4
                 "#,
@@ -263,13 +269,16 @@ async fn get_feed_items(
                 ItemResponse,
                 r#"
                 SELECT
-                    i.id as "id!", i.feed_id as "feed_id!", i.title, i.link, i.content, i.author,
+                    i.id as "id!",
+                    ARRAY[$2::uuid] as "feed_ids!",
+                    i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
                     ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
                 FROM items i
+                INNER JOIN feeds f ON i.source_id = f.source_id
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
-                WHERE i.feed_id = $2 AND i.published_at < $3
+                WHERE f.id = $2 AND i.published_at < $3
                 ORDER BY i.published_at DESC
                 LIMIT $4
                 "#,
@@ -286,13 +295,16 @@ async fn get_feed_items(
                 ItemResponse,
                 r#"
                 SELECT
-                    i.id as "id!", i.feed_id as "feed_id!", i.title, i.link, i.content, i.author,
+                    i.id as "id!",
+                    ARRAY[$2::uuid] as "feed_ids!",
+                    i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
                     ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
                 FROM items i
+                INNER JOIN feeds f ON i.source_id = f.source_id
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
-                WHERE i.feed_id = $2 AND (ir.is_read IS NULL OR ir.is_read = false)
+                WHERE f.id = $2 AND (ir.is_read IS NULL OR ir.is_read = false)
                 ORDER BY i.published_at DESC
                 LIMIT $3
                 "#,
@@ -308,13 +320,16 @@ async fn get_feed_items(
                 ItemResponse,
                 r#"
                 SELECT
-                    i.id as "id!", i.feed_id as "feed_id!", i.title, i.link, i.content, i.author,
+                    i.id as "id!",
+                    ARRAY[$2::uuid] as "feed_ids!",
+                    i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
                     ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
                 FROM items i
+                INNER JOIN feeds f ON i.source_id = f.source_id
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
-                WHERE i.feed_id = $2
+                WHERE f.id = $2
                 ORDER BY i.published_at DESC
                 LIMIT $3
                 "#,
@@ -352,70 +367,72 @@ async fn get_all_items(
                 ItemResponse,
                 r#"
                 SELECT
-                    i.id as "id!", i.feed_id as "feed_id!", i.title, i.link, i.content, i.author,
+                    i.id as "id!",
+                    array_agg(f.id) as "feed_ids!",
+                    i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
                     ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
                 FROM items i
-                INNER JOIN feeds f ON i.feed_id = f.id
-                LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
+                INNER JOIN sources s ON i.source_id = s.id
+                INNER JOIN feeds f ON f.source_id = s.id
+                INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 WHERE fs.user_id = $1 AND i.published_at < $2
+                GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked
                 ORDER BY i.published_at DESC
                 LIMIT $3
                 "#,
-                user_id,
-                before,
-                limit
-            )
-            .fetch_all(&state.db)
-            .await
+                user_id, before, limit
+            ).fetch_all(&state.db).await
         }
         (_, true) => {
             sqlx::query_as!(
                 ItemResponse,
                 r#"
                 SELECT
-                    i.id as "id!", i.feed_id as "feed_id!", i.title, i.link, i.content, i.author,
+                    i.id as "id!",
+                    array_agg(f.id) as "feed_ids!",
+                    i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
                     ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
                 FROM items i
-                INNER JOIN feeds f ON i.feed_id = f.id
-                LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
+                INNER JOIN sources s ON i.source_id = s.id
+                INNER JOIN feeds f ON f.source_id = s.id
+                INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 WHERE fs.user_id = $1 AND (ir.is_read IS NULL OR ir.is_read = false)
+                GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked
                 ORDER BY i.published_at DESC
                 LIMIT $2
                 "#,
-                user_id,
-                limit
-            )
-            .fetch_all(&state.db)
-            .await
+                user_id, limit
+            ).fetch_all(&state.db).await
         }
         _ => {
             sqlx::query_as!(
                 ItemResponse,
                 r#"
                 SELECT
-                    i.id as "id!", i.feed_id as "feed_id!", i.title, i.link, i.content, i.author,
+                    i.id as "id!",
+                    array_agg(f.id) as "feed_ids!",
+                    i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
                     ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
                 FROM items i
-                INNER JOIN feeds f ON i.feed_id = f.id
-                LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
+                INNER JOIN sources s ON i.source_id = s.id
+                INNER JOIN feeds f ON f.source_id = s.id
+                INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 WHERE fs.user_id = $1
+                GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked
                 ORDER BY i.published_at DESC
                 LIMIT $2
                 "#,
-                user_id,
-                limit
-            )
-            .fetch_all(&state.db)
-            .await
+                user_id, limit
+            ).fetch_all(&state.db).await
         }
     }
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
@@ -433,7 +450,7 @@ async fn update_item_status(
         r#"
         SELECT EXISTS(
             SELECT 1 FROM items i
-            INNER JOIN feeds f ON i.feed_id = f.id
+            INNER JOIN feeds f ON i.source_id = f.source_id
             LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
             WHERE i.id = $2 AND (f.owner_id = $1 OR fs.user_id = $1)
         ) as "has_access!"
@@ -443,10 +460,22 @@ async fn update_item_status(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e: sqlx::Error| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
 
     if !has_access.has_access {
-        return Err((StatusCode::FORBIDDEN, Json(ErrorResponse { error: "Access denied".into() })));
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "Access denied".into(),
+            }),
+        ));
     }
 
     let status = sqlx::query_as!(
@@ -455,16 +484,12 @@ async fn update_item_status(
         INSERT INTO item_reads (user_id, item_id, is_read, liked)
         VALUES ($1, $2, COALESCE($3::BOOLEAN, true), COALESCE($4::REAL, 0.0))
         ON CONFLICT (user_id, item_id)
-        DO UPDATE SET 
-            is_read = COALESCE($3::BOOLEAN, item_reads.is_read), 
+        DO UPDATE SET
+            is_read = COALESCE($3::BOOLEAN, item_reads.is_read),
             liked = COALESCE($4::REAL, item_reads.liked),
             marked_at = CURRENT_TIMESTAMP
-        RETURNING 
-            user_id, 
-            item_id, 
-            is_read, 
-            ROUND(liked)::REAL as "liked!", 
-            marked_at
+        RETURNING
+            user_id, item_id, is_read, ROUND(liked)::REAL as "liked!", marked_at
         "#,
         user_id,
         item_id,
@@ -473,10 +498,14 @@ async fn update_item_status(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e: sqlx::Error| (
-        StatusCode::INTERNAL_SERVER_ERROR, 
-        Json(ErrorResponse { error: e.to_string() })
-    ))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
 
     Ok(Json(status))
 }
@@ -513,7 +542,7 @@ async fn mark_feed_items_read(
         return Err((
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
-                error: "Access denied to this feed".to_string(),
+                error: "Access denied".into(),
             }),
         ));
     }
@@ -523,7 +552,8 @@ async fn mark_feed_items_read(
         INSERT INTO item_reads (user_id, item_id, is_read, liked, marked_at)
         SELECT $1, i.id, true, 0.0, CURRENT_TIMESTAMP
         FROM items i
-        WHERE i.feed_id = $2 AND i.published_at >= $3
+        INNER JOIN feeds f ON i.source_id = f.source_id
+        WHERE f.id = $2 AND i.published_at >= $3
         ON CONFLICT (user_id, item_id)
         DO UPDATE SET is_read = true, marked_at = CURRENT_TIMESTAMP
         "#,
@@ -555,11 +585,13 @@ async fn mark_all_items_read(
     let result = sqlx::query!(
         r#"
         INSERT INTO item_reads (user_id, item_id, is_read, liked, marked_at)
-        SELECT $1, i.id, true, 0.0, CURRENT_TIMESTAMP
+        SELECT DISTINCT $1::UUID, i.id, true, 0.0, CURRENT_TIMESTAMP
         FROM items i
-        INNER JOIN feeds f ON i.feed_id = f.id
-        LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
-        WHERE (f.owner_id = $1 OR fs.user_id = $1) AND i.published_at >= $2
+        INNER JOIN sources s ON i.source_id = s.id
+        INNER JOIN feeds f ON f.source_id = s.id
+        LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id
+        WHERE (f.owner_id = $1 OR fs.user_id = $1)
+          AND i.published_at >= $2
         ON CONFLICT (user_id, item_id)
         DO UPDATE SET is_read = true, marked_at = CURRENT_TIMESTAMP
         "#,
@@ -613,17 +645,18 @@ async fn get_feed_unread_count(
         return Err((
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
-                error: "Access denied to this feed".to_string(),
+                error: "Access denied".into(),
             }),
         ));
     }
 
     let count = sqlx::query!(
         r#"
-        SELECT COUNT(*) as "count!"
+        SELECT COUNT(DISTINCT i.id) as "count!"
         FROM items i
+        INNER JOIN feeds f ON i.source_id = f.source_id
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
-        WHERE i.feed_id = $2 AND (ir.is_read IS NULL OR ir.is_read = false)
+        WHERE f.id = $2 AND (ir.is_read IS NULL OR ir.is_read = false)
         "#,
         user_id,
         feed_id
@@ -650,12 +683,13 @@ async fn get_all_unread_count(
 ) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<ErrorResponse>)> {
     let count = sqlx::query!(
         r#"
-        SELECT COUNT(*) as "count!"
+        SELECT COUNT(DISTINCT i.id) as "count!"
         FROM items i
-        INNER JOIN feeds f ON i.feed_id = f.id
-        LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
+        INNER JOIN sources s ON i.source_id = s.id
+        INNER JOIN feeds f ON f.source_id = s.id
+        LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
-        WHERE (f.owner_id = $1 OR fs.user_id = $1) 
+        WHERE (f.owner_id = $1 OR fs.user_id = $1)
           AND (ir.is_read IS NULL OR ir.is_read = false)
         "#,
         user_id
@@ -682,12 +716,13 @@ async fn get_all_unread_counts(
 ) -> Result<Json<AllUnreadCountsResponse>, (StatusCode, Json<ErrorResponse>)> {
     let feed_counts = sqlx::query!(
         r#"
-        SELECT 
+        SELECT
             f.id as feed_id,
             COUNT(i.id) FILTER (WHERE ir.is_read IS NULL OR ir.is_read = false) as "unread_count!"
         FROM feeds f
         INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
-        LEFT JOIN items i ON f.id = i.feed_id
+        INNER JOIN sources s ON f.source_id = s.id
+        LEFT JOIN items i ON s.id = i.source_id
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
         GROUP BY f.id
         ORDER BY f.id

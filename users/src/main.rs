@@ -183,14 +183,36 @@ async fn add_feed(
     AuthUser(user_id): AuthUser,
     Json(payload): Json<AddFeedRequest>,
 ) -> Result<(StatusCode, Json<FeedResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let source = sqlx::query!(
+        r#"
+        INSERT INTO sources (url)
+        VALUES ($1)
+        ON CONFLICT (url) DO UPDATE SET url = EXCLUDED.url
+        RETURNING id, url
+        "#,
+        payload.url
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
     let existing_feed = sqlx::query_as!(
         FeedResponse,
         r#"
-        SELECT id, owner_id, url, title, description, is_public, created_at
-        FROM feeds WHERE url = $1 AND owner_id = $2
+        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.created_at
+        FROM feeds f
+        JOIN sources s ON f.source_id = s.id
+        WHERE f.owner_id = $1 AND f.source_id = $2
         "#,
-        payload.url,
-        user_id
+        user_id,
+        source.id
     )
     .fetch_optional(&state.db)
     .await
@@ -203,59 +225,52 @@ async fn add_feed(
         )
     })?;
 
-    let (feed, is_new) = match existing_feed {
-        Some(f) => (f, false),
-        None => {
-            let new_feed = sqlx::query_as!(
-                FeedResponse,
-                r#"
-                INSERT INTO feeds (owner_id, url, title, description, is_public)
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING id, owner_id, url, title, description, is_public, created_at
-                "#,
-                user_id,
-                payload.url,
-                payload.title,
-                payload.description,
-                payload.is_public.unwrap_or(false)
-            )
-            .fetch_one(&state.db)
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: e.to_string(),
-                    }),
-                )
-            })?;
-
-            (new_feed, true)
-        }
-    };
-
-    if is_new {
-        let client = state.http_client.clone();
-        let feed_id = feed.id;
-
-        tokio::spawn(async move {
-            let url = format!("http://fetcher:3003/feeds/{}/refresh", feed_id);
-            match client.post(&url).send().await {
-                Ok(res) => {
-                    if !res.status().is_success() {
-                        eprintln!(
-                            "Fetcher returned error for feed {}: {}",
-                            feed_id,
-                            res.status()
-                        );
-                    }
-                }
-                Err(e) => eprintln!("Failed to connect to fetcher for feed {}: {}", feed_id, e),
-            }
-        });
+    if let Some(feed) = existing_feed {
+        return Ok((StatusCode::OK, Json(feed)));
     }
 
-    Ok((StatusCode::CREATED, Json(feed)))
+    let new_feed = sqlx::query_as!(
+        FeedResponse,
+        r#"
+        INSERT INTO feeds (owner_id, source_id, title, description, is_public)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, owner_id, $6::TEXT as "url!", title, description, is_public, created_at
+        "#,
+        user_id,
+        source.id,
+        payload.title,
+        payload.description,
+        payload.is_public.unwrap_or(false),
+        source.url
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    sqlx::query!(
+        "INSERT INTO feed_subscriptions (user_id, feed_id) VALUES ($1, $2)",
+        user_id,
+        new_feed.id
+    )
+    .execute(&state.db)
+    .await
+    .ok();
+
+    let client = state.http_client.clone();
+    let feed_id = new_feed.id;
+    tokio::spawn(async move {
+        let url = format!("http://fetcher:3003/feeds/{}/refresh", feed_id);
+        client.post(&url).send().await.ok();
+    });
+
+    Ok((StatusCode::CREATED, Json(new_feed)))
 }
 
 async fn list_subscribed_feeds(
@@ -265,8 +280,9 @@ async fn list_subscribed_feeds(
     let feeds = sqlx::query_as!(
         FeedResponse,
         r#"
-        SELECT f.id, f.owner_id, f.url, f.title, f.description, f.is_public, f.created_at
+        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.created_at
         FROM feeds f
+        JOIN sources s ON f.source_id = s.id
         JOIN feed_subscriptions fs ON f.id = fs.feed_id
         WHERE fs.user_id = $1
         ORDER BY f.created_at DESC
@@ -294,10 +310,11 @@ async fn list_owned_feeds(
     let feeds = sqlx::query_as!(
         FeedResponse,
         r#"
-        SELECT id, owner_id, url, title, description, is_public, created_at
-        FROM feeds
-        WHERE owner_id = $1
-        ORDER BY created_at DESC
+        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.created_at
+        FROM feeds f
+        JOIN sources s ON f.source_id = s.id
+        WHERE f.owner_id = $1
+        ORDER BY f.created_at DESC
         "#,
         user_id
     )
@@ -390,26 +407,25 @@ async fn update_feed(
             )
         })?;
 
-    let feed_record = match feed {
-        Some(f) => f,
+    match feed {
+        Some(f) if f.owner_id == Some(user_id) => {}
+        Some(_) => {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: "Not owner".into(),
+                }),
+            ));
+        }
         None => {
             return Err((
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    error: "Feed not found".to_string(),
+                    error: "Not found".into(),
                 }),
             ));
         }
     };
-
-    if feed_record.owner_id != Some(user_id) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: "You are not the owner of this feed".to_string(),
-            }),
-        ));
-    }
 
     let updated_feed = sqlx::query_as!(
         FeedResponse,
@@ -419,8 +435,9 @@ async fn update_feed(
             title = COALESCE($1, title),
             description = COALESCE($2, description),
             is_public = COALESCE($3, is_public)
-        WHERE id = $4
-        RETURNING id, owner_id, url, title, description, is_public, created_at
+        FROM sources s
+        WHERE feeds.id = $4 AND feeds.source_id = s.id
+        RETURNING feeds.id, feeds.owner_id, s.url, feeds.title, feeds.description, feeds.is_public, feeds.created_at
         "#,
         payload.title,
         payload.description,
@@ -429,14 +446,7 @@ async fn update_feed(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
     Ok(Json(updated_feed))
 }
@@ -449,8 +459,10 @@ async fn get_feed(
     let feed = sqlx::query_as!(
         FeedResponse,
         r#"
-        SELECT id, owner_id, url, title, description, is_public, created_at
-        FROM feeds WHERE id = $1
+        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.created_at
+        FROM feeds f
+        JOIN sources s ON f.source_id = s.id
+        WHERE f.id = $1
         "#,
         feed_id,
     )
@@ -465,23 +477,18 @@ async fn get_feed(
         )
     })?;
 
-    let feed_record = match feed {
-        Some(f) => f,
-        None => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: "Feed not found".to_string(),
-                }),
-            ));
-        }
-    };
+    let feed_record = feed.ok_or((
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse {
+            error: "Feed not found".into(),
+        }),
+    ))?;
 
     if feed_record.owner_id != Some(user_id) && feed_record.is_public != Some(true) {
         return Err((
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
-                error: "You can't access this feed".to_string(),
+                error: "Access denied".into(),
             }),
         ));
     }
@@ -553,13 +560,13 @@ async fn subscribe_feed(
     AuthUser(user_id): AuthUser,
     Path(feed_id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<FeedSubscriptionResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let feed = sqlx::query_as!(
-        FeedResponse,
+    let feed = sqlx::query!(
         r#"
-        SELECT id, owner_id, url, title, description, is_public, created_at
-        FROM feeds WHERE id = $1
+        SELECT f.owner_id, f.is_public
+        FROM feeds f
+        WHERE f.id = $1
         "#,
-        feed_id,
+        feed_id
     )
     .fetch_optional(&state.db)
     .await
@@ -572,37 +579,34 @@ async fn subscribe_feed(
         )
     })?;
 
-    let feed_record = match feed {
-        Some(f) => f,
-        None => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: "Feed not found".to_string(),
-                }),
-            ));
-        }
-    };
+    let feed_record = feed.ok_or((
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse {
+            error: "Not found".into(),
+        }),
+    ))?;
 
     if feed_record.owner_id != Some(user_id) && feed_record.is_public != Some(true) {
         return Err((
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
-                error: "You can't access this feed".to_string(),
+                error: "Access denied".into(),
             }),
         ));
     }
 
-    let existing_subscription = sqlx::query_as!(
+    let sub = sqlx::query_as!(
         FeedSubscriptionResponse,
         r#"
-        SELECT user_id, feed_id, created_at
-        FROM feed_subscriptions WHERE user_id = $1 AND feed_id = $2
+        INSERT INTO feed_subscriptions (user_id, feed_id)
+        VALUES ($1, $2)
+        ON CONFLICT (user_id, feed_id) DO UPDATE SET created_at = feed_subscriptions.created_at
+        RETURNING user_id, feed_id, created_at
         "#,
         user_id,
         feed_id,
     )
-    .fetch_optional(&state.db)
+    .fetch_one(&state.db)
     .await
     .map_err(|e| {
         (
@@ -613,35 +617,7 @@ async fn subscribe_feed(
         )
     })?;
 
-    let subscription = match existing_subscription {
-        Some(s) => s,
-        None => {
-            let new_subscription = sqlx::query_as!(
-                FeedSubscriptionResponse,
-                r#"
-                INSERT INTO feed_subscriptions (user_id, feed_id)
-                VALUES ($1, $2)
-                RETURNING user_id, feed_id, created_at
-                "#,
-                user_id,
-                feed_id,
-            )
-            .fetch_one(&state.db)
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: e.to_string(),
-                    }),
-                )
-            })?;
-
-            new_subscription
-        }
-    };
-
-    Ok((StatusCode::CREATED, Json(subscription)))
+    Ok((StatusCode::CREATED, Json(sub)))
 }
 
 async fn unsubscribe_feed(
@@ -649,13 +625,9 @@ async fn unsubscribe_feed(
     AuthUser(user_id): AuthUser,
     Path(feed_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let feed = sqlx::query_as!(
-        FeedResponse,
-        r#"
-        SELECT id, owner_id, url, title, description, is_public, created_at
-        FROM feeds WHERE id = $1
-        "#,
-        feed_id,
+    let feed = sqlx::query!(
+        "SELECT owner_id, is_public FROM feeds WHERE id = $1",
+        feed_id
     )
     .fetch_optional(&state.db)
     .await
@@ -674,7 +646,7 @@ async fn unsubscribe_feed(
             return Err((
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    error: "Feed not found".to_string(),
+                    error: "Feed not found".into(),
                 }),
             ));
         }
@@ -684,7 +656,7 @@ async fn unsubscribe_feed(
         return Err((
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
-                error: "You can't access this feed".to_string(),
+                error: "Access denied".into(),
             }),
         ));
     }
@@ -709,7 +681,7 @@ async fn unsubscribe_feed(
         return Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: "Subscription not found".to_string(),
+                error: "Subscription not found".into(),
             }),
         ));
     }
@@ -727,11 +699,12 @@ async fn search_public_feeds(
     let feeds = sqlx::query_as!(
         FeedResponse,
         r#"
-        SELECT id, owner_id, url, title, description, is_public, created_at
-        FROM feeds
-        WHERE is_public = true
-          AND (title ILIKE $1 OR description ILIKE $1 OR url ILIKE $1)
-        ORDER BY created_at DESC
+        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.created_at
+        FROM feeds f
+        JOIN sources s ON f.source_id = s.id
+        WHERE f.is_public = true
+          AND (f.title ILIKE $1 OR f.description ILIKE $1 OR s.url ILIKE $1)
+        ORDER BY f.created_at DESC
         LIMIT 50
         "#,
         search_pattern
