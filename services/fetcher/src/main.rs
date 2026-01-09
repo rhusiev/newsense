@@ -7,6 +7,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use feed_rs::parser;
 use log::{error, info, warn};
+use redis::aio::ConnectionManager;
 use serde::Serialize;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
@@ -17,6 +18,7 @@ use uuid::Uuid;
 struct AppState {
     db: PgPool,
     queue_tx: mpsc::Sender<Uuid>,
+    valkey: ConnectionManager,
 }
 
 #[derive(Clone)]
@@ -33,11 +35,22 @@ async fn main() {
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://user:pass@localhost/authdb".to_string());
 
+    let valkey_url =
+        std::env::var("VALKEY_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
+
     let pool = PgPoolOptions::new()
         .max_connections(10)
         .connect(&database_url)
         .await
         .expect("Failed to connect to database");
+
+    let valkey_client = redis::Client::open(valkey_url).expect("Failed to create Valkey client");
+
+    let valkey_conn = ConnectionManager::new(valkey_client)
+        .await
+        .expect("Failed to connect to Valkey");
+
+    info!("Connected to Valkey");
 
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -50,9 +63,10 @@ async fn main() {
     let app_state = AppState {
         db: pool.clone(),
         queue_tx: tx.clone(),
+        valkey: valkey_conn.clone(),
     };
 
-    tokio::spawn(worker_task(pool.clone(), http_client, rx));
+    tokio::spawn(worker_task(pool.clone(), http_client, valkey_conn, rx));
 
     tokio::spawn(scheduler_task(pool.clone(), tx.clone()));
 
@@ -142,7 +156,12 @@ async fn scheduler_task(pool: PgPool, tx: mpsc::Sender<Uuid>) {
     }
 }
 
-async fn worker_task(pool: PgPool, http_client: reqwest::Client, mut rx: mpsc::Receiver<Uuid>) {
+async fn worker_task(
+    pool: PgPool,
+    http_client: reqwest::Client,
+    valkey: ConnectionManager,
+    mut rx: mpsc::Receiver<Uuid>,
+) {
     let semaphore = Arc::new(Semaphore::new(5));
 
     info!("Worker started. Waiting for jobs...");
@@ -150,12 +169,13 @@ async fn worker_task(pool: PgPool, http_client: reqwest::Client, mut rx: mpsc::R
     while let Some(feed_id) = rx.recv().await {
         let pool = pool.clone();
         let client = http_client.clone();
+        let valkey = valkey.clone();
         let permit = semaphore.clone().acquire_owned().await.unwrap();
 
         tokio::spawn(async move {
             let _permit = permit;
 
-            if let Err(e) = process_single_feed(&pool, &client, feed_id).await {
+            if let Err(e) = process_single_feed(&pool, &client, valkey, feed_id).await {
                 error!("Failed to process feed {}: {}", feed_id, e);
             }
         });
@@ -165,6 +185,7 @@ async fn worker_task(pool: PgPool, http_client: reqwest::Client, mut rx: mpsc::R
 async fn process_single_feed(
     pool: &PgPool,
     client: &reqwest::Client,
+    mut valkey: ConnectionManager,
     source_id: Uuid,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let source_info = sqlx::query_as!(
@@ -201,6 +222,8 @@ async fn process_single_feed(
         })
         .await??;
 
+        let mut new_item_ids = Vec::new();
+
         for entry in feed.entries {
             let title = entry
                 .title
@@ -222,11 +245,12 @@ async fn process_single_feed(
             let author = entry.authors.first().map(|a| a.name.clone());
             let published_at = entry.published.or(entry.updated).unwrap_or_else(Utc::now);
 
-            sqlx::query!(
+            let result = sqlx::query!(
                 r#"
                 INSERT INTO items (source_id, title, link, content, author, published_at)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 ON CONFLICT (source_id, link) DO NOTHING
+                RETURNING id
                 "#,
                 source_info.id,
                 title,
@@ -235,9 +259,27 @@ async fn process_single_feed(
                 author,
                 published_at,
             )
-            .execute(pool)
+            .fetch_optional(pool)
             .await?;
+
+            if let Some(row) = result {
+                new_item_ids.push(row.id);
+            }
         }
+
+        if !new_item_ids.is_empty() {
+            info!("Pushing {} new items to Valkey queue", new_item_ids.len());
+
+            let item_id_strings: Vec<String> =
+                new_item_ids.iter().map(|id| id.to_string()).collect();
+
+            redis::cmd("RPUSH")
+                .arg("article_embeddings")
+                .arg(&item_id_strings)
+                .query_async::<()>(&mut valkey)
+                .await?;
+        }
+
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     }
     .await;

@@ -14,3 +14,4 @@ log = "0.4"
 env_logger = "0.11"
 serde = "1.0.228"
 axum = "0.8.8"
+redis = { version = "1.0.2", features = ["tokio-comp", "connection-manager"] }

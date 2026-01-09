@@ -1,0 +1,25 @@
+services:
+  auth:
+    build:
+      context: ./services/auth
+      dockerfile: Dockerfile
+
+  users:
+    build:
+      context: ./services/users
+      dockerfile: Dockerfile
+
+  aggregator:
+    build:
+      context: ./services/aggregator
+      dockerfile: Dockerfile
+
+  fetcher:
+    build:
+      context: ./services/fetcher
+      dockerfile: Dockerfile
+
+  embeddings:
+    build:
+      context: ./services/embeddings
+      dockerfile: Dockerfile

@@ -11,9 +11,9 @@ services:
       - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
-      - ./traefik/acme.json:/acme.json
+      - ./infrastructure/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./infrastructure/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - ./infrastructure/traefik/acme.json:/acme.json
     networks:
       - web
 
@@ -27,23 +27,92 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - web
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
+  valkey:
+    image: valkey/valkey:9.0.1
+    container_name: valkey
+    restart: unless-stopped
+    networks:
+      - web
+    volumes:
+      - valkey_data:/data
+
   auth:
-    build: ./auth
+    build: ./services/auth
     container_name: auth
     restart: unless-stopped
     networks:
       - web
     environment:
       DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  users:
+    build: ./services/users
+    container_name: users
+    restart: unless-stopped
+    networks:
+      - web
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  aggregator:
+    build: ./services/aggregator
+    container_name: aggregator
+    restart: unless-stopped
+    networks:
+      - web
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  fetcher:
+    build: ./services/fetcher
+    container_name: fetcher
+    restart: unless-stopped
+    networks:
+      - web
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      VALKEY_URL: redis://valkey:6379
+      RUST_LOG: info
+      FETCH_INTERVAL_SECONDS: 300
+    depends_on:
+      db:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+
+  embeddings:
+    build: ./services/embeddings
+    container_name: embeddings
+    restart: unless-stopped
+    networks:
+      - web
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      VALKEY_URL: redis://valkey:6379
+      RECONCILIATION_INTERVAL_MINUTES: 10
+    depends_on:
+      db:
+        condition: service_healthy
+      valkey:
+        condition: service_started
 
 networks:
   web:
@@ -51,3 +120,4 @@ networks:
 
 volumes:
   postgres_data:
+  valkey_data:

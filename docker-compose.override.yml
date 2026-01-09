@@ -1,0 +1,82 @@
+services:
+  # Expose for local dev tools
+  db:
+    ports:
+      - "5432:5432"
+  valkey:
+    ports:
+      - "6379:6379"
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    networks:
+      - web
+    depends_on:
+      - db
+
+  auth:
+    build:
+      context: ./services/auth
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./services/auth:/app
+      - auth_cargo_cache:/usr/local/cargo/registry
+      - auth_target_cache:/app/target
+
+  users:
+    build:
+      context: ./services/users
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./services/users:/app
+      - users_cargo_cache:/usr/local/cargo/registry
+      - users_target_cache:/app/target
+
+  aggregator:
+    build:
+      context: ./services/aggregator
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3002:3002"
+    volumes:
+      - ./services/aggregator:/app
+      - aggregator_cargo_cache:/usr/local/cargo/registry
+      - aggregator_target_cache:/app/target
+
+  fetcher:
+    build:
+      context: ./services/fetcher
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./services/fetcher:/app
+      - fetcher_cargo_cache:/usr/local/cargo/registry
+      - fetcher_target_cache:/app/target
+
+  embeddings:
+    build:
+      context: ./services/embeddings
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./services/embeddings:/app
+      - embeddings-uv-cache:/root/.cache/uv
+
+volumes:
+  auth_cargo_cache:
+  auth_target_cache:
+  users_cargo_cache:
+  users_target_cache:
+  aggregator_cargo_cache:
+  aggregator_target_cache:
+  fetcher_cargo_cache:
+  fetcher_target_cache:
+  embeddings-uv-cache:

@@ -97,7 +97,6 @@ CREATE TABLE IF NOT EXISTS rule_subscriptions (
     PRIMARY KEY (user_id, rule_id)
 );
 
--- Indexes
 CREATE INDEX idx_item_reads_user_id ON item_reads(user_id);
 CREATE INDEX idx_item_reads_item_id ON item_reads(item_id);
 CREATE INDEX idx_items_published ON items(published_at DESC);
