@@ -5,17 +5,20 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
     ports:
       - "80:80"
       - "443:443"
-      - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./infrastructure/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./infrastructure/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
       - ./infrastructure/traefik/acme.json:/acme.json
     networks:
-      - web
+      - web_gateway
 
   db:
     image: pgvector/pgvector:pg16
@@ -29,7 +32,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
-      - web
+      - internal_backend
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -41,7 +44,7 @@ services:
     container_name: valkey
     restart: unless-stopped
     networks:
-      - web
+      - internal_backend
     volumes:
       - valkey_data:/data
 
@@ -50,43 +53,66 @@ services:
     container_name: auth
     restart: unless-stopped
     networks:
-      - web
+      - web_gateway
+      - internal_backend
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      WEB_URL: ${WEB_URL}
     depends_on:
       db:
         condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.auth.rule=PathPrefix(`/auth`)" 
+      - "traefik.http.middlewares.auth-strip.stripprefix.prefixes=/auth"
+      - "traefik.http.routers.auth.middlewares=auth-strip"
+      - "traefik.http.services.auth.loadbalancer.server.port=3000"
+      - "traefik.docker.network=web_gateway"
 
   users:
     build: ./services/users
     container_name: users
     restart: unless-stopped
     networks:
-      - web
+      - web_gateway
+      - internal_backend
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      WEB_URL: ${WEB_URL}
     depends_on:
       db:
         condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.users.rule=PathPrefix(`/feeds`)"
+      - "traefik.http.services.users.loadbalancer.server.port=3001"
+      - "traefik.docker.network=web_gateway"
 
   aggregator:
     build: ./services/aggregator
     container_name: aggregator
     restart: unless-stopped
     networks:
-      - web
+      - web_gateway
+      - internal_backend
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      WEB_URL: ${WEB_URL}
     depends_on:
       db:
         condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.aggregator.rule=PathPrefix(`/items`) || PathPrefix(`/clusters`)"
+      - "traefik.http.services.aggregator.loadbalancer.server.port=3002"
+      - "traefik.docker.network=web_gateway"
 
   fetcher:
     build: ./services/fetcher
     container_name: fetcher
     restart: unless-stopped
     networks:
-      - web
+      - internal_backend
     environment:
       DATABASE_URL: ${DATABASE_URL}
       VALKEY_URL: redis://valkey:6379
@@ -103,7 +129,7 @@ services:
     container_name: embeddings
     restart: unless-stopped
     networks:
-      - web
+      - internal_backend
     environment:
       DATABASE_URL: ${DATABASE_URL}
       VALKEY_URL: redis://valkey:6379
@@ -115,8 +141,10 @@ services:
         condition: service_started
 
 networks:
-  web:
-    external: false
+  web_gateway:
+    external: true
+  internal_backend:
+    driver: bridge
 
 volumes:
   postgres_data:

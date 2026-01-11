@@ -8,7 +8,7 @@ use argon2::{
 use axum::{
     Json, Router,
     extract::State,
-    http::StatusCode,
+    http::{StatusCode, Method, HeaderValue, header},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -23,6 +23,7 @@ use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
 use tower_sessions::{Expiry, Session, SessionManagerLayer, cookie::time::Duration};
 use tower_sessions_sqlx_store::PostgresStore;
 use uuid::Uuid;
+use tower_http::cors::CorsLayer;
 
 const REMEMBER_COOKIE_NAME: &str = "remember_me";
 const REMEMBER_DURATION_DAYS: i64 = 30;
@@ -145,6 +146,21 @@ async fn main() {
         }
     });
 
+    let web_url = std::env::var("FRONTEND_URL")
+        .unwrap_or_else(|_| "http://localhost:5173".to_string());
+
+    let allowed_origins = [
+        web_url.parse::<HeaderValue>().unwrap(),
+        "http://127.0.0.1:5173".parse::<HeaderValue>().unwrap(),
+        "http://localhost:5173".parse::<HeaderValue>().unwrap(),
+    ];
+
+    let cors = CorsLayer::new()
+        .allow_origin(allowed_origins) 
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE, header::HeaderName::from_static("x-csrf-token")])
+        .allow_credentials(true);
+
     let app = Router::new()
         .route("/register", post(register))
         .route("/login", post(login))
@@ -153,6 +169,7 @@ async fn main() {
         .layer(session_layer)
         .layer(GovernorLayer::new(governor_config))
         .layer(CsrfLayer::new(csrf_config))
+        .layer(cors)
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")

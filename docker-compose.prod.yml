@@ -1,25 +1,35 @@
 services:
+  traefik:
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      - "--certificatesresolvers.myresolver.acme.email=${SSL_CERTIFICATE_EMAIL}"
+      - "--certificatesresolvers.myresolver.acme.storage=/acme.json"
   auth:
-    build:
-      context: ./services/auth
-      dockerfile: Dockerfile
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.auth.tls=true"
+      - "traefik.http.routers.auth.tls.certresolver=myresolver"
+      - "traefik.http.routers.auth.rule=Host(`${API_DOMAIN}`) && PathPrefix(`/auth`)"
+      - "traefik.http.services.auth.loadbalancer.server.port=3000"
 
   users:
-    build:
-      context: ./services/users
-      dockerfile: Dockerfile
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.users.tls=true"
+      - "traefik.http.routers.users.tls.certresolver=myresolver"
+      - "traefik.http.routers.users.rule=Host(`${API_DOMAIN}`) && PathPrefix(`/feeds`)"
+      - "traefik.http.services.users.loadbalancer.server.port=3001"
 
   aggregator:
-    build:
-      context: ./services/aggregator
-      dockerfile: Dockerfile
-
-  fetcher:
-    build:
-      context: ./services/fetcher
-      dockerfile: Dockerfile
-
-  embeddings:
-    build:
-      context: ./services/embeddings
-      dockerfile: Dockerfile
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.aggregator.tls=true"
+      - "traefik.http.routers.aggregator.tls.certresolver=myresolver"
+      - "traefik.http.routers.aggregator.rule=Host(`${API_DOMAIN}`) && (PathPrefix(`/items`) || PathPrefix(`/clusters`))"
+      - "traefik.http.services.aggregator.loadbalancer.server.port=3002"
