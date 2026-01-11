@@ -196,20 +196,23 @@ async fn main() {
     let app_state = AppState { db: pool };
 
     let app = Router::new()
-        .route("/feeds/{feed_id}/items", get(get_feed_items))
+        .route("/items/feed/{feed_id}", get(get_feed_items))
         .route(
-            "/feeds/{feed_id}/items/mark-read",
+            "/items/feed/{feed_id}/mark-read",
             post(mark_feed_items_read),
         )
-        .route("/feeds/{feed_id}/unread-count", get(get_feed_unread_count))
+        .route(
+            "/items/feed/{feed_id}/unread-count",
+            get(get_feed_unread_count),
+        )
         .route("/items", get(get_all_items))
         .route("/items/mark-read", post(mark_all_items_read))
         .route("/items/unread-count", get(get_all_unread_count))
         .route("/items/unread-counts", get(get_all_unread_counts))
         .route("/items/{item_id}/status", put(update_item_status))
-        .route("/feeds/{feed_id}/clusters", get(get_feed_clusters))
+        .route("/clusters/feed/{feed_id}", get(get_feed_clusters))
         .route(
-            "/feeds/{feed_id}/clusters/mark-read",
+            "/clusters/feed/{feed_id}/mark-read",
             post(mark_feed_clusters_read),
         )
         .route("/clusters", get(get_clusters))
