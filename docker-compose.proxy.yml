@@ -1,0 +1,9 @@
+services:
+  gateway:
+    networks:
+      - caddy_net
+
+networks:
+  caddy_net:
+    external: true
+    name: caddy # The name of your existing Caddy network

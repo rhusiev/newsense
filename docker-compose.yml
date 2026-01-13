@@ -1,28 +1,24 @@
 services:
-  traefik:
+  gateway:
     image: traefik:v3.0
-    container_name: traefik
+    container_name: newsense_gateway
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
     command:
-      - "--api.insecure=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-    ports:
-      - "80:80"
-      - "443:443"
+      # We trust forwarded headers because we might be behind Caddy/Nginx
+      - "--entrypoints.web.forwardedHeaders.insecure=true"
+    networks:
+      - internal_backend
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./infrastructure/traefik/acme.json:/acme.json
-    networks:
-      - web_gateway
 
   db:
     image: pgvector/pgvector:pg16
-    container_name: postgres_db
+    container_name: newsense_db
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
@@ -30,7 +26,6 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - internal_backend
     healthcheck:
@@ -41,7 +36,7 @@ services:
 
   valkey:
     image: valkey/valkey:9.0.1
-    container_name: valkey
+    container_name: newsense_valkey
     restart: unless-stopped
     networks:
       - internal_backend
@@ -50,71 +45,69 @@ services:
 
   auth:
     build: ./services/auth
-    container_name: auth
+    container_name: newsense_auth
     restart: unless-stopped
     networks:
-      - web_gateway
       - internal_backend
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      WEB_URL: ${WEB_URL}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      WEB_URL: https://${WEB_DOMAIN}
     depends_on:
       db:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.auth.rule=PathPrefix(`/auth`)" 
+      - "traefik.http.routers.auth.entrypoints=web"
+      - "traefik.http.routers.auth.rule=Host(`${WEB_DOMAIN}`) && PathPrefix(`/auth`)"
       - "traefik.http.middlewares.auth-strip.stripprefix.prefixes=/auth"
       - "traefik.http.routers.auth.middlewares=auth-strip"
       - "traefik.http.services.auth.loadbalancer.server.port=3000"
-      - "traefik.docker.network=web_gateway"
 
   users:
     build: ./services/users
-    container_name: users
+    # image: ghcr.io/youruser/rss-users:latest
+    container_name: newsense_users
     restart: unless-stopped
     networks:
-      - web_gateway
       - internal_backend
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      WEB_URL: ${WEB_URL}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      WEB_URL: https://${WEB_DOMAIN}
     depends_on:
       db:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.users.rule=PathPrefix(`/feeds`)"
+      - "traefik.http.routers.users.entrypoints=web"
+      - "traefik.http.routers.users.rule=Host(`${WEB_DOMAIN}`) && PathPrefix(`/feeds`)"
       - "traefik.http.services.users.loadbalancer.server.port=3001"
-      - "traefik.docker.network=web_gateway"
 
   aggregator:
     build: ./services/aggregator
-    container_name: aggregator
+    container_name: newsense_aggregator
     restart: unless-stopped
     networks:
-      - web_gateway
       - internal_backend
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      WEB_URL: ${WEB_URL}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      WEB_URL: https://${WEB_DOMAIN}
     depends_on:
       db:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.aggregator.rule=PathPrefix(`/items`) || PathPrefix(`/clusters`)"
+      - "traefik.http.routers.aggregator.entrypoints=web"
+      - "traefik.http.routers.aggregator.rule=Host(`${WEB_DOMAIN}`) && (PathPrefix(`/items`) || PathPrefix(`/clusters`))"
       - "traefik.http.services.aggregator.loadbalancer.server.port=3002"
-      - "traefik.docker.network=web_gateway"
 
   fetcher:
     build: ./services/fetcher
-    container_name: fetcher
+    container_name: newsense_fetcher
     restart: unless-stopped
     networks:
       - internal_backend
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       VALKEY_URL: redis://valkey:6379
       RUST_LOG: info
       FETCH_INTERVAL_SECONDS: 300
@@ -126,12 +119,12 @@ services:
 
   embeddings:
     build: ./services/embeddings
-    container_name: embeddings
+    container_name: newsense_embeddings
     restart: unless-stopped
     networks:
       - internal_backend
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       VALKEY_URL: redis://valkey:6379
       RECONCILIATION_INTERVAL_MINUTES: 10
     depends_on:
@@ -141,10 +134,7 @@ services:
         condition: service_started
 
 networks:
-  web_gateway:
-    external: true
   internal_backend:
-    driver: bridge
 
 volumes:
   postgres_data:
