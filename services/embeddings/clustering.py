@@ -49,7 +49,7 @@ async def update_item_with_cluster(conn, item_id: str, embedding_list: list, clu
     )
 
 
-async def process_item_logic(conn, model, item_id: str):
+async def process_item_logic(conn, encode_fn, item_id: str):
     row = await conn.fetchrow(
         "SELECT title, content, published_at FROM items WHERE id = $1", item_id
     )
@@ -61,7 +61,7 @@ async def process_item_logic(conn, model, item_id: str):
     content = row["content"] or ""
     text_to_embed = prepare_text_for_embedding(title, content)
 
-    embedding = model.encode(text_to_embed)
+    embedding = encode_fn([text_to_embed])[0]
     embedding_list = embedding.tolist()
 
     reference_time = row["published_at"] or datetime.datetime.now(datetime.timezone.utc)

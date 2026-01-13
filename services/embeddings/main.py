@@ -4,7 +4,9 @@ from typing import Optional
 
 import asyncpg
 from redis import asyncio as aioredis
-from sentence_transformers import SentenceTransformer
+from optimum.onnxruntime import ORTModelForFeatureExtraction
+from transformers import AutoTokenizer
+import numpy as np
 
 from config import (
     DATABASE_URL, 
@@ -21,8 +23,33 @@ logger = logging.getLogger("clustering-service")
 
 db_pool: Optional[asyncpg.Pool] = None
 valkey_client: Optional[aioredis.Redis] = None
-model: Optional[SentenceTransformer] = None
+model: Optional[ORTModelForFeatureExtraction] = None
+tokenizer: Optional[AutoTokenizer] = None
 shutdown_event = asyncio.Event()
+
+
+def mean_pooling(model_output, attention_mask):
+    token_embeddings = model_output[0]
+    input_mask_expanded = np.expand_dims(attention_mask, axis=-1).astype(float)
+    return np.sum(token_embeddings * input_mask_expanded, axis=1) / np.clip(
+        np.sum(input_mask_expanded, axis=1), a_min=1e-9, a_max=None
+    )
+
+
+def encode_texts(texts: list[str]) -> np.ndarray:
+    encoded_input = tokenizer(
+        texts, 
+        padding=True, 
+        truncation=True, 
+        return_tensors='np',
+        max_length=512
+    )
+    
+    model_output = model(**encoded_input)
+    embeddings = mean_pooling(model_output, encoded_input['attention_mask'])
+    
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    return embeddings / norms
 
 
 async def process_queue_consumer():
@@ -37,7 +64,7 @@ async def process_queue_consumer():
             item_id = item_id.decode('utf-8')
             
             async with db_pool.acquire() as conn:
-                await process_item_logic(conn, model, item_id)
+                await process_item_logic(conn, encode_texts, item_id)
                 logger.info(f"Processed item from queue: {item_id}")
                 
         except Exception as e:
@@ -62,7 +89,7 @@ async def reconciliation_worker():
                     logger.info(f"Reconciliation found {len(unprocessed_ids)} unprocessed items")
                     
                     for row in unprocessed_ids:
-                        await process_item_logic(conn, model, str(row['id']))
+                        await process_item_logic(conn, encode_texts, str(row['id']))
                         logger.info(f"Reconciliation processed: {row['id']}")
                         
         except Exception as e:
@@ -70,10 +97,15 @@ async def reconciliation_worker():
 
 
 async def startup():
-    global db_pool, valkey_client, model
+    global db_pool, valkey_client, model, tokenizer
     
-    logger.info(f"Loading model: {MODEL_NAME}...")
-    model = SentenceTransformer(MODEL_NAME, device='cpu')
+    logger.info(f"Loading ONNX model: {MODEL_NAME}...")
+    model = ORTModelForFeatureExtraction.from_pretrained(
+        MODEL_NAME,
+        export=True,
+        provider="CPUExecutionProvider"
+    )
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     logger.info("Model loaded")
 
     logger.info("Connecting to database...")
