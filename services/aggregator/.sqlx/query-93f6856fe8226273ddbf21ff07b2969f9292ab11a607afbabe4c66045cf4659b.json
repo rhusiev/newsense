@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT\n                    i.id as \"id!\",\n                    array_agg(f.id) as \"feed_ids!\",\n                    i.title, i.link, i.content, i.author,\n                    i.published_at, i.cluster_id, i.created_at,\n                    ir.is_read as \"is_read?\",\n                    ROUND(COALESCE(ir.liked, 0.0))::REAL as \"liked?\"\n                FROM items i\n                INNER JOIN sources s ON i.source_id = s.id\n                INNER JOIN feeds f ON f.source_id = s.id\n                INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id\n                LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n                WHERE fs.user_id = $1 AND (ir.is_read IS NULL OR ir.is_read = false)\n                GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked\n                ORDER BY i.published_at DESC\n                LIMIT $2\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "feed_ids!",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "link",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "author",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "published_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "cluster_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "is_read?",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "liked?",
+        "type_info": "Float4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      null
+    ]
+  },
+  "hash": "93f6856fe8226273ddbf21ff07b2969f9292ab11a607afbabe4c66045cf4659b"
+}

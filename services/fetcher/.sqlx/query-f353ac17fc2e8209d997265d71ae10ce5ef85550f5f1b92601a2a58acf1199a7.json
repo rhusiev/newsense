@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id\n            FROM sources\n            WHERE error_count < 5\n              AND (\n                  last_fetched_at IS NULL\n                  OR last_fetched_at < NOW() - make_interval(secs => $1)\n              )\n            LIMIT 100\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f353ac17fc2e8209d997265d71ae10ce5ef85550f5f1b92601a2a58acf1199a7"
+}

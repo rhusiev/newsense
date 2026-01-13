@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH target_items AS (\n            SELECT i.id\n            FROM items i\n            WHERE i.cluster_id = $2 OR (i.cluster_id IS NULL AND i.id = $2)\n        )\n        INSERT INTO item_reads (user_id, item_id, is_read, liked, marked_at)\n        SELECT $1, id, COALESCE($3::BOOLEAN, true), COALESCE($4::REAL, 0.0), CURRENT_TIMESTAMP\n        FROM target_items\n        ON CONFLICT (user_id, item_id)\n        DO UPDATE SET\n            is_read = COALESCE($3::BOOLEAN, item_reads.is_read),\n            liked = COALESCE($4::REAL, item_reads.liked),\n            marked_at = CURRENT_TIMESTAMP\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool",
+        "Float4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5bf62f82bdf5447ce6d8873554248b6c5e82e6371d50b632c7f18233dc7576bb"
+}

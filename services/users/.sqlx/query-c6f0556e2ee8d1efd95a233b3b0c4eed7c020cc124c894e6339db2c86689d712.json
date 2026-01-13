@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO sources (url)\n        VALUES ($1)\n        ON CONFLICT (url) DO UPDATE SET url = EXCLUDED.url\n        RETURNING id, url\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "c6f0556e2ee8d1efd95a233b3b0c4eed7c020cc124c894e6339db2c86689d712"
+}

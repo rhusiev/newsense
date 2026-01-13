@@ -1,0 +1,17 @@
+services:
+  gateway:
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infrastructure/traefik/acme.json:/acme.json
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      - "--certificatesresolvers.myresolver.acme.email=${SSL_CERTIFICATE_EMAIL}"
+      - "--certificatesresolvers.myresolver.acme.storage=/acme.json"

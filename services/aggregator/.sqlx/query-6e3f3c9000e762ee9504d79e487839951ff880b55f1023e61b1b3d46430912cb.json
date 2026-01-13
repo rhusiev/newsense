@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT EXISTS(\n            SELECT 1 FROM feeds f\n            LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1\n            WHERE f.id = $2 AND (f.owner_id = $1 OR fs.user_id = $1)\n        ) as \"has_access!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "has_access!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6e3f3c9000e762ee9504d79e487839951ff880b55f1023e61b1b3d46430912cb"
+}

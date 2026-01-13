@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO feed_subscriptions (user_id, feed_id)\n        VALUES ($1, $2)\n        ON CONFLICT (user_id, feed_id) DO UPDATE SET created_at = feed_subscriptions.created_at\n        RETURNING user_id, feed_id, created_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "feed_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "eecc914ee5af7cde8ed7b4733d4f62bd0dd0878e7c25056808ef6a9dbc9d8931"
+}

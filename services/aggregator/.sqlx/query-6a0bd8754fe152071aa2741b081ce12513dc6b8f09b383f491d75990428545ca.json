@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(DISTINCT i.id) as \"count!\"\n        FROM items i\n        INNER JOIN feeds f ON i.source_id = f.source_id\n        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n        WHERE f.id = $2 AND (ir.is_read IS NULL OR ir.is_read = false)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6a0bd8754fe152071aa2741b081ce12513dc6b8f09b383f491d75990428545ca"
+}

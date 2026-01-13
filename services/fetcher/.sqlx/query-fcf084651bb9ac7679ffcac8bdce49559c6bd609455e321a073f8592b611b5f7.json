@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sources SET last_fetched_at = $1, error_count = 0 WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fcf084651bb9ac7679ffcac8bdce49559c6bd609455e321a073f8592b611b5f7"
+}

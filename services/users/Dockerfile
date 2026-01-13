@@ -6,5 +6,5 @@ ENV SQLX_OFFLINE=true
 RUN cargo build --release --target x86_64-unknown-linux-musl
 
 FROM alpine:latest
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/newsense-auth /usr/local/bin/
-CMD ["newsense-auth"]
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/newsense-users /usr/local/bin/
+CMD ["newsense-users"]
