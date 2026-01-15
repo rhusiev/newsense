@@ -60,7 +60,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.auth.entrypoints=web"
-      - "traefik.http.routers.auth.rule=Host(`${WEB_DOMAIN}`) && PathPrefix(`/auth`)"
+      - "traefik.http.routers.auth.rule=Host(`${API_DOMAIN}`) && PathPrefix(`/auth`)"
       - "traefik.http.middlewares.auth-strip.stripprefix.prefixes=/auth"
       - "traefik.http.routers.auth.middlewares=auth-strip"
       - "traefik.http.services.auth.loadbalancer.server.port=3000"
@@ -83,7 +83,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.users.entrypoints=web"
-      - "traefik.http.routers.users.rule=Host(`${WEB_DOMAIN}`) && PathPrefix(`/feeds`)"
+      - "traefik.http.routers.users.rule=Host(`${API_DOMAIN}`) && PathPrefix(`/feeds`)"
       - "traefik.http.services.users.loadbalancer.server.port=3001"
     volumes:
       - ./services/users:/app
@@ -104,7 +104,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.aggregator.entrypoints=web"
-      - "traefik.http.routers.aggregator.rule=Host(`${WEB_DOMAIN}`) && (PathPrefix(`/items`) || PathPrefix(`/clusters`))"
+      - "traefik.http.routers.aggregator.rule=Host(`${API_DOMAIN}`) && (PathPrefix(`/items`) || PathPrefix(`/clusters`))"
       - "traefik.http.services.aggregator.loadbalancer.server.port=3002"
     volumes:
       - ./services/aggregator:/app
