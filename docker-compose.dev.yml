@@ -30,6 +30,7 @@ services:
       - db
     labels:
       - "traefik.enable=true"
+      - "traefik.docker.network=internal_backend"
       - "traefik.http.routers.pgadmin.rule=Host(`pgadmin.localhost`)"
       - "traefik.http.routers.pgadmin.entrypoints=web"
       - "traefik.http.services.pgadmin.loadbalancer.server.port=80"

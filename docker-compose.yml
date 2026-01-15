@@ -59,6 +59,7 @@ services:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
+      - "traefik.docker.network=internal_backend"
       - "traefik.http.routers.auth.entrypoints=web"
       - "traefik.http.routers.auth.rule=Host(`${API_DOMAIN}`) && PathPrefix(`/auth`)"
       - "traefik.http.middlewares.auth-strip.stripprefix.prefixes=/auth"
@@ -82,6 +83,7 @@ services:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
+      - "traefik.docker.network=internal_backend"
       - "traefik.http.routers.users.entrypoints=web"
       - "traefik.http.routers.users.rule=Host(`${API_DOMAIN}`) && PathPrefix(`/feeds`)"
       - "traefik.http.services.users.loadbalancer.server.port=3001"
@@ -103,6 +105,7 @@ services:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
+      - "traefik.docker.network=internal_backend"
       - "traefik.http.routers.aggregator.entrypoints=web"
       - "traefik.http.routers.aggregator.rule=Host(`${API_DOMAIN}`) && (PathPrefix(`/items`) || PathPrefix(`/clusters`))"
       - "traefik.http.services.aggregator.loadbalancer.server.port=3002"
