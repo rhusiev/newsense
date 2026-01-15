@@ -46,7 +46,7 @@ services:
 
   auth:
     build: ./services/auth
-    image: ghcr.io/rhusiev/newsense-auth:latest
+    image: ghcr.io/rhusiev/newsense-auth:${VERSION:-latest}
     container_name: newsense_auth
     restart: unless-stopped
     networks:
@@ -69,7 +69,7 @@ services:
 
   users:
     build: ./services/users
-    image: ghcr.io/rhusiev/newsense-users:latest
+    image: ghcr.io/rhusiev/newsense-users:${VERSION:-latest}
     container_name: newsense_users
     restart: unless-stopped
     networks:
@@ -90,7 +90,7 @@ services:
 
   aggregator:
     build: ./services/aggregator
-    image: ghcr.io/rhusiev/newsense-aggregator:latest
+    image: ghcr.io/rhusiev/newsense-aggregator:${VERSION:-latest}
     container_name: newsense_aggregator
     restart: unless-stopped
     networks:
@@ -111,7 +111,7 @@ services:
 
   fetcher:
     build: ./services/fetcher
-    image: ghcr.io/rhusiev/newsense-fetcher:latest
+    image: ghcr.io/rhusiev/newsense-fetcher:${VERSION:-latest}
     container_name: newsense_fetcher
     restart: unless-stopped
     networks:
@@ -131,7 +131,7 @@ services:
 
   embeddings:
     build: ./services/embeddings
-    image: ghcr.io/rhusiev/newsense-embeddings:latest
+    image: ghcr.io/rhusiev/newsense-embeddings:${VERSION:-latest}
     container_name: newsense_embeddings
     restart: unless-stopped
     networks:
