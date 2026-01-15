@@ -146,7 +146,7 @@ async fn main() {
         }
     });
 
-    let web_url = std::env::var("FRONTEND_URL")
+    let web_url = std::env::var("WEB_URL")
         .unwrap_or_else(|_| "http://localhost:5173".to_string());
 
     let allowed_origins = [
