@@ -55,6 +55,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       WEB_URL: https://${WEB_DOMAIN}
       COOKIE_DOMAIN: ${COOKIE_DOMAIN}
+      REGISTRATION_ENABLED: ${REGISTRATION_ENABLED}
     depends_on:
       db:
         condition: service_healthy
