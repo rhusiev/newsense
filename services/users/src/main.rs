@@ -1,16 +1,16 @@
 use axum::{
     Json, RequestPartsExt, Router,
     extract::{FromRequestParts, Path, Query, State},
-    http::{StatusCode, Method, HeaderValue, request::Parts, header},
+    http::{HeaderValue, Method, StatusCode, header, request::Parts},
     routing::{delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::net::SocketAddr;
+use tower_http::cors::CorsLayer;
 use tower_sessions::{Expiry, Session, SessionManagerLayer, cookie::time::Duration};
 use tower_sessions_sqlx_store::PostgresStore;
 use uuid::Uuid;
-use tower_http::cors::CorsLayer;
 
 const SESSION_COOKIE_NAME: &str = "newsense_session";
 
@@ -154,8 +154,7 @@ async fn main() {
         http_client: reqwest::Client::new(),
     };
 
-    let web_url = std::env::var("WEB_URL")
-        .unwrap_or_else(|_| "http://localhost:5173".to_string());
+    let web_url = std::env::var("WEB_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
 
     let allowed_origins = [
         web_url.parse::<HeaderValue>().unwrap(),
@@ -164,9 +163,18 @@ async fn main() {
     ];
 
     let cors = CorsLayer::new()
-        .allow_origin(allowed_origins) 
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers([header::CONTENT_TYPE, header::HeaderName::from_static("x-csrf-token")])
+        .allow_origin(allowed_origins)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::OPTIONS,
+            Method::PUT,
+            Method::DELETE,
+        ])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::HeaderName::from_static("x-csrf-token"),
+        ])
         .allow_credentials(true);
 
     let app = Router::new()
