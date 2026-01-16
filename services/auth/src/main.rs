@@ -33,6 +33,7 @@ const SESSION_COOKIE_NAME: &str = "newsense_session";
 struct AppState {
     db: PgPool,
     is_production: bool,
+    registration_enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -129,9 +130,18 @@ async fn main() {
         .with_name(SESSION_COOKIE_NAME)
         .with_domain(cookie_domain);
 
+    let registration_enabled = std::env::var("REGISTRATION_ENABLED")
+        .map(|val| match val.to_lowercase().as_str() {
+            "true" | "1" | "yes" => true,
+            "false" | "0" | "no" => false,
+            _ => true,
+        })
+        .unwrap_or(true);
+
     let app_state = AppState {
         db: pool,
         is_production,
+        registration_enabled,
     };
     let csrf_config = CsrfConfig::default();
 
@@ -224,6 +234,15 @@ async fn register(
     State(state): State<AppState>,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<AuthResponse>), (StatusCode, Json<ErrorResponse>)> {
+    if !state.registration_enabled {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "Registration is currently disabled".to_string(),
+            }),
+        ));
+    }
+
     if payload.username.len() < 3 || payload.username.len() > 255 {
         return Err((
             StatusCode::BAD_REQUEST,
