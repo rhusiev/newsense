@@ -8,22 +8,22 @@ use argon2::{
 use axum::{
     Json, Router,
     extract::State,
-    http::{StatusCode, Method, HeaderValue, header},
+    http::{HeaderValue, Method, StatusCode, header},
     response::IntoResponse,
     routing::{get, post},
 };
 use axum_csrf::{CsrfConfig, CsrfLayer};
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as BASE64};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, postgres::PgPoolOptions, types::time::OffsetDateTime};
 use std::{net::SocketAddr, time};
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
+use tower_http::cors::CorsLayer;
 use tower_sessions::{Expiry, Session, SessionManagerLayer, cookie::time::Duration};
 use tower_sessions_sqlx_store::PostgresStore;
 use uuid::Uuid;
-use tower_http::cors::CorsLayer;
 
 const REMEMBER_COOKIE_NAME: &str = "remember_me";
 const REMEMBER_DURATION_DAYS: i64 = 30;
@@ -119,10 +119,13 @@ async fn main() {
         .await
         .expect("Failed to migrate session store");
 
+    let cookie_domain = std::env::var("COOKIE_DOMAIN").unwrap_or_else(|_| ".localhost".to_string());
+
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(is_production)
         .with_same_site(tower_sessions::cookie::SameSite::Lax)
-        .with_expiry(Expiry::OnInactivity(Duration::new(3600, 0)));
+        .with_expiry(Expiry::OnInactivity(Duration::new(3600, 0)))
+        .with_domain(cookie_domain);
 
     let app_state = AppState {
         db: pool,
@@ -146,8 +149,7 @@ async fn main() {
         }
     });
 
-    let web_url = std::env::var("WEB_URL")
-        .unwrap_or_else(|_| "http://localhost:5173".to_string());
+    let web_url = std::env::var("WEB_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
 
     let allowed_origins = [
         web_url.parse::<HeaderValue>().unwrap(),
@@ -156,9 +158,12 @@ async fn main() {
     ];
 
     let cors = CorsLayer::new()
-        .allow_origin(allowed_origins) 
+        .allow_origin(allowed_origins)
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers([header::CONTENT_TYPE, header::HeaderName::from_static("x-csrf-token")])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::HeaderName::from_static("x-csrf-token"),
+        ])
         .allow_credentials(true);
 
     let app = Router::new()

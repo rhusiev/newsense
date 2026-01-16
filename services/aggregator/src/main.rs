@@ -189,10 +189,13 @@ async fn main() {
         is_production
     );
 
+        let cookie_domain = std::env::var("COOKIE_DOMAIN").unwrap_or_else(|_| ".localhost".to_string());
+
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(is_production)
         .with_same_site(tower_sessions::cookie::SameSite::Lax)
-        .with_expiry(Expiry::OnInactivity(Duration::new(3600, 0)));
+        .with_expiry(Expiry::OnInactivity(Duration::new(3600, 0)))
+        .with_domain(cookie_domain);
 
     let app_state = AppState { db: pool };
 
