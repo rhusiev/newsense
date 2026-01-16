@@ -195,6 +195,7 @@ async fn main() {
         .with_secure(is_production)
         .with_same_site(tower_sessions::cookie::SameSite::Lax)
         .with_expiry(Expiry::OnInactivity(Duration::new(3600, 0)))
+        .with_name("newsense_session")
         .with_domain(cookie_domain);
 
     let app_state = AppState { db: pool };
