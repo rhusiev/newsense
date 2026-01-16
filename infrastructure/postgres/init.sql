@@ -104,6 +104,7 @@ CREATE INDEX idx_items_source_id ON items(source_id);
 CREATE INDEX idx_feeds_source_id ON feeds(source_id);
 CREATE INDEX idx_feed_subscriptions_user_id ON feed_subscriptions(user_id);
 CREATE INDEX idx_items_cluster_id ON items(cluster_id) WHERE cluster_id IS NOT NULL;
+CREATE INDEX idx_clusters_last_updated ON clusters(last_updated_at);
 
-CREATE INDEX ON items USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-CREATE INDEX ON clusters USING ivfflat (centroid vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX idx_items_embedding_hnsw ON items USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX idx_clusters_centroid_hnsw ON clusters USING hnsw (centroid vector_cosine_ops);
