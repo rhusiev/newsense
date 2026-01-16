@@ -1,6 +1,6 @@
 [project]
 name = "newsense-embeddings"
-version = "0.6.0"
+version = "0.0.0"
 description = "A service for Newsense to make embeddings for articles and cluster them"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
