@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 const REMEMBER_COOKIE_NAME: &str = "remember_me";
 const REMEMBER_DURATION_DAYS: i64 = 30;
+const SESSION_COOKIE_NAME: &str = "newsense_session";
 
 #[derive(Clone)]
 struct AppState {
@@ -125,7 +126,7 @@ async fn main() {
         .with_secure(is_production)
         .with_same_site(tower_sessions::cookie::SameSite::Lax)
         .with_expiry(Expiry::OnInactivity(Duration::new(3600, 0)))
-        .with_name("newsense_session")
+        .with_name(SESSION_COOKIE_NAME)
         .with_domain(cookie_domain);
 
     let app_state = AppState {

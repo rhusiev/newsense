@@ -13,6 +13,8 @@ use tower_sessions_sqlx_store::PostgresStore;
 use uuid::Uuid;
 use tower_http::cors::CorsLayer;
 
+const SESSION_COOKIE_NAME: &str = "newsense_session";
+
 #[derive(Clone)]
 struct AppState {
     db: PgPool,
@@ -195,7 +197,7 @@ async fn main() {
         .with_secure(is_production)
         .with_same_site(tower_sessions::cookie::SameSite::Lax)
         .with_expiry(Expiry::OnInactivity(Duration::new(3600, 0)))
-        .with_name("newsense_session")
+        .with_name(SESSION_COOKIE_NAME)
         .with_domain(cookie_domain);
 
     let app_state = AppState { db: pool };
