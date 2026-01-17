@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS feeds (
 
 CREATE TABLE IF NOT EXISTS clusters (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    centroid vector(384),
+    centroid vector(1024),
     title_summary TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     last_updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS items (
 
     published_at TIMESTAMP WITH TIME ZONE,
     cluster_id UUID,
-    embedding vector(384),
+    embedding vector(1024),
     CONSTRAINT fk_items_clusters FOREIGN KEY (cluster_id) REFERENCES clusters(id),
 
     CONSTRAINT unique_item_per_source UNIQUE (source_id, link)
