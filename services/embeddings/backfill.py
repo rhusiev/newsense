@@ -34,14 +34,6 @@ def encode_texts(texts: list[str]) -> np.ndarray:
         texts, padding=True, truncation=True, return_tensors="np", max_length=512
     )
 
-    if "position_ids" not in encoded_input:
-        input_ids = encoded_input["input_ids"]
-        batch_size, seq_len = input_ids.shape
-
-        position_ids = np.arange(seq_len, dtype=np.int64).reshape(1, -1)
-
-        encoded_input["position_ids"] = np.repeat(position_ids, batch_size, axis=0)
-
     model_output = model(**encoded_input)
     embeddings = mean_pooling(model_output, encoded_input["attention_mask"])
 
@@ -66,15 +58,13 @@ async def run_backfill():
             export=False,
             provider="CPUExecutionProvider",
         )
-        tokenizer = AutoTokenizer.from_pretrained(
-            LOCAL_MODEL_PATH, fix_mistral_regex=True
-        )
+        tokenizer = AutoTokenizer.from_pretrained(LOCAL_MODEL_PATH)
     else:
         print(f"Model not found locally. Downloading and exporting {MODEL_NAME}...")
         model = ORTModelForFeatureExtraction.from_pretrained(
             MODEL_NAME, export=True, provider="CPUExecutionProvider"
         )
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, fix_mistral_regex=True)
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
         print(f"Saving converted model to {LOCAL_MODEL_PATH}...")
         model.save_pretrained(LOCAL_MODEL_PATH)
