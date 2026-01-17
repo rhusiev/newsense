@@ -34,6 +34,7 @@ struct AppState {
     db: PgPool,
     is_production: bool,
     registration_enabled: bool,
+    cookie_domain: String,
 }
 
 #[derive(Deserialize)]
@@ -128,7 +129,7 @@ async fn main() {
         .with_same_site(tower_sessions::cookie::SameSite::Lax)
         .with_expiry(Expiry::OnInactivity(Duration::new(3600, 0)))
         .with_name(SESSION_COOKIE_NAME)
-        .with_domain(cookie_domain);
+        .with_domain(cookie_domain.clone());
 
     let registration_enabled = std::env::var("REGISTRATION_ENABLED")
         .map(|val| match val.to_lowercase().as_str() {
@@ -142,6 +143,7 @@ async fn main() {
         db: pool,
         is_production,
         registration_enabled,
+        cookie_domain,
     };
     let csrf_config = CsrfConfig::default();
 
@@ -392,6 +394,7 @@ async fn login(
         cookie.set_same_site(SameSite::Lax);
         cookie.set_path("/");
         cookie.set_max_age(Duration::days(REMEMBER_DURATION_DAYS));
+        cookie.set_domain(state.cookie_domain);
 
         response_jar = response_jar.add(cookie);
     }
