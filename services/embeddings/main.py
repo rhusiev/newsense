@@ -105,7 +105,10 @@ async def startup():
     ):
         logger.info(f"Loading existing local model from {LOCAL_MODEL_PATH}...")
         model = ORTModelForFeatureExtraction.from_pretrained(
-            LOCAL_MODEL_PATH, export=False, provider="CPUExecutionProvider"
+            LOCAL_MODEL_PATH,
+            export=False,
+            provider="CPUExecutionProvider",
+            fix_mistral_regex=True,
         )
         tokenizer = AutoTokenizer.from_pretrained(LOCAL_MODEL_PATH)
     else:
@@ -113,7 +116,10 @@ async def startup():
             f"Model not found locally. Downloading and exporting {MODEL_NAME}..."
         )
         model = ORTModelForFeatureExtraction.from_pretrained(
-            MODEL_NAME, export=True, provider="CPUExecutionProvider"
+            MODEL_NAME,
+            export=True,
+            provider="CPUExecutionProvider",
+            fix_mistral_regex=True,
         )
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 

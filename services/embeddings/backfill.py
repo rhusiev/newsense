@@ -57,12 +57,16 @@ async def run_backfill():
             LOCAL_MODEL_PATH,
             export=False,
             provider="CPUExecutionProvider",
+            fix_mistral_regex=True,
         )
         tokenizer = AutoTokenizer.from_pretrained(LOCAL_MODEL_PATH)
     else:
         print(f"Model not found locally. Downloading and exporting {MODEL_NAME}...")
         model = ORTModelForFeatureExtraction.from_pretrained(
-            MODEL_NAME, export=True, provider="CPUExecutionProvider"
+            MODEL_NAME,
+            export=True,
+            provider="CPUExecutionProvider",
+            fix_mistral_regex=True,
         )
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
