@@ -928,10 +928,8 @@ pub async fn mark_feed_clusters_read(
         SELECT DISTINCT $1::uuid, i.id, true, 0.0, CURRENT_TIMESTAMP
         FROM items i
         WHERE
-            -- Case A: Item is a singleton found in the feed scope
             (i.cluster_id IS NULL AND i.id IN (SELECT id FROM target_scope))
             OR
-            -- Case B: Item belongs to a cluster found in the feed scope (includes articles from other feeds)
             (i.cluster_id IS NOT NULL AND i.cluster_id IN (SELECT cluster_id FROM target_scope))
         ON CONFLICT (user_id, item_id)
         DO UPDATE SET is_read = true, marked_at = CURRENT_TIMESTAMP
