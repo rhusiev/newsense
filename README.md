@@ -2,6 +2,11 @@
 docker network create web_gateway
 ```
 
+```sh
+cargo install sqlx-cli
+cargo sqlx prepare
+```
+
 ```sql
 BEGIN;
 UPDATE items 
