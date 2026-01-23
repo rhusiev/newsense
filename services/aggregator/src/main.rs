@@ -1,12 +1,12 @@
-mod app_state;
+mod state;
 mod auth;
 mod handlers;
 mod models;
+mod router;
+mod utils;
 
 use axum::{
     http::{HeaderValue, Method, header},
-    routing::{get, post, put},
-    Router,
 };
 use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
@@ -15,16 +15,9 @@ use tower_sessions::{cookie::time::Duration, Expiry, SessionManagerLayer};
 use tower_sessions_sqlx_store::PostgresStore;
 
 use crate::{
-    app_state::AppState,
-    handlers::{
-        get_all_items, get_all_unread_count, get_all_unread_counts, get_cluster_unread_count,
-        get_clusters, get_feed_clusters, get_feed_items, get_feed_unread_count,
-        mark_all_items_read, mark_feed_clusters_read, mark_feed_items_read, update_cluster_status,
-        update_item_status,
-    },
+    state::AppState,
+    utils::SESSION_COOKIE_NAME,
 };
-
-const SESSION_COOKIE_NAME: &str = "newsense_session";
 
 #[tokio::main]
 async fn main() {
@@ -84,29 +77,7 @@ async fn main() {
         ])
         .allow_credentials(true);
 
-    let app = Router::new()
-        .route("/items/feed/{feed_id}", get(get_feed_items))
-        .route(
-            "/items/feed/{feed_id}/mark-read",
-            post(mark_feed_items_read),
-        )
-        .route(
-            "/items/feed/{feed_id}/unread-count",
-            get(get_feed_unread_count),
-        )
-        .route("/items", get(get_all_items))
-        .route("/items/mark-read", post(mark_all_items_read))
-        .route("/items/unread-count", get(get_all_unread_count))
-        .route("/items/unread-counts", get(get_all_unread_counts))
-        .route("/items/{item_id}/status", put(update_item_status))
-        .route("/clusters/feed/{feed_id}", get(get_feed_clusters))
-        .route(
-            "/clusters/feed/{feed_id}/mark-read",
-            post(mark_feed_clusters_read),
-        )
-        .route("/clusters", get(get_clusters))
-        .route("/clusters/{id}/status", put(update_cluster_status))
-        .route("/clusters/unread-count", get(get_cluster_unread_count))
+    let app = router::routes()
         .layer(session_layer)
         .layer(cors)
         .with_state(app_state);
