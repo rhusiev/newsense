@@ -535,23 +535,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fetcher"
-version = "0.1.0"
-dependencies = [
- "axum",
- "chrono",
- "env_logger",
- "feed-rs",
- "log",
- "redis",
- "reqwest",
- "serde",
- "sqlx",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1198,6 +1181,23 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "newsense-fetcher"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "env_logger",
+ "feed-rs",
+ "log",
+ "redis",
+ "reqwest",
+ "serde",
+ "sqlx",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
