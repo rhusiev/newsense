@@ -7,12 +7,10 @@ from transformers import AutoTokenizer
 import numpy as np
 from tqdm import tqdm
 
-from config import DATABASE_URL, MODEL_NAME, LOCAL_MODEL_PATH
+from config import DATABASE_URL, EMBEDDING_MODEL_NAME, EMBEDDING_MODEL_PATH, BATCH_SIZE
 from clustering import process_item_logic
 
 logging.getLogger("transformers").setLevel(logging.WARNING)
-
-BATCH_SIZE = 50
 
 model = None
 tokenizer = None
@@ -47,30 +45,30 @@ async def run_backfill():
     print(f"Connecting to {DATABASE_URL}...")
     pool = await asyncpg.create_pool(DATABASE_URL)
 
-    print(f"Checking for model at {LOCAL_MODEL_PATH}...")
+    print(f"Checking for model at {EMBEDDING_MODEL_PATH}...")
 
-    if os.path.exists(LOCAL_MODEL_PATH) and os.path.exists(
-        os.path.join(LOCAL_MODEL_PATH, "model.onnx")
+    if os.path.exists(EMBEDDING_MODEL_PATH) and os.path.exists(
+        os.path.join(EMBEDDING_MODEL_PATH, "model.onnx")
     ):
-        print(f"Loading existing local model from {LOCAL_MODEL_PATH}...")
+        print(f"Loading existing local model from {EMBEDDING_MODEL_PATH}...")
         model = ORTModelForFeatureExtraction.from_pretrained(
-            LOCAL_MODEL_PATH,
+            EMBEDDING_MODEL_PATH,
             export=False,
             provider="CPUExecutionProvider",
         )
-        tokenizer = AutoTokenizer.from_pretrained(LOCAL_MODEL_PATH)
+        tokenizer = AutoTokenizer.from_pretrained(EMBEDDING_MODEL_PATH)
     else:
-        print(f"Model not found locally. Downloading and exporting {MODEL_NAME}...")
+        print(f"Model not found locally. Downloading and exporting {EMBEDDING_MODEL_NAME}...")
         model = ORTModelForFeatureExtraction.from_pretrained(
-            MODEL_NAME,
+            EMBEDDING_MODEL_NAME,
             export=True,
             provider="CPUExecutionProvider",
         )
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+        tokenizer = AutoTokenizer.from_pretrained(EMBEDDING_MODEL_NAME)
 
-        print(f"Saving converted model to {LOCAL_MODEL_PATH}...")
-        model.save_pretrained(LOCAL_MODEL_PATH)
-        tokenizer.save_pretrained(LOCAL_MODEL_PATH)
+        print(f"Saving converted model to {EMBEDDING_MODEL_PATH}...")
+        model.save_pretrained(EMBEDDING_MODEL_PATH)
+        tokenizer.save_pretrained(EMBEDDING_MODEL_PATH)
 
     try:
         async with pool.acquire() as conn:
