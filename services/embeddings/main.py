@@ -108,7 +108,6 @@ async def startup():
             LOCAL_MODEL_PATH,
             export=False,
             provider="CPUExecutionProvider",
-            fix_mistral_regex=True,
         )
         tokenizer = AutoTokenizer.from_pretrained(LOCAL_MODEL_PATH)
     else:
@@ -119,7 +118,6 @@ async def startup():
             MODEL_NAME,
             export=True,
             provider="CPUExecutionProvider",
-            fix_mistral_regex=True,
         )
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
