@@ -8,6 +8,10 @@ cargo sqlx prepare
 ```
 
 ```sh
+DATABASE_URL=postgres://newsense_user:pswd_replace_me@localhost:5432/newsense_db cargo sqlx prepare
+```
+
+```sh
 docker exec -it newsense_db psql -U newsense_user -d newsense_db
 ```
 

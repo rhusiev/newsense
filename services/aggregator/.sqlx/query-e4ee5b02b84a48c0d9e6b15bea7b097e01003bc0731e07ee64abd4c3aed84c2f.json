@@ -1,0 +1,92 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH anchor_items AS (\n            SELECT i.id, i.cluster_id, i.published_at\n            FROM items i\n            INNER JOIN feeds f ON i.source_id = f.source_id\n            LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n            WHERE f.id = $2\n              AND ($3::timestamptz IS NULL OR i.published_at < $3)\n              AND ($4::boolean = false OR (ir.is_read IS NULL OR ir.is_read = false))\n        ),\n        anchor_entities AS (\n            SELECT\n                COALESCE(cluster_id, id) as entity_id,\n                MAX(published_at) as max_date\n            FROM anchor_items\n            GROUP BY COALESCE(cluster_id, id)\n            ORDER BY max_date DESC\n            LIMIT $5\n        )\n        SELECT\n            i.id as \"id!\",\n            array_agg(f.id) as \"feed_ids!\",\n            i.title, i.link, i.content, i.author,\n            i.published_at, i.cluster_id, i.created_at,\n            ir.is_read as \"is_read?\",\n            ROUND(COALESCE(ir.liked, 0.0))::REAL as \"liked?\",\n            ip.score as \"prediction_score?\"\n        FROM items i\n        INNER JOIN sources s ON i.source_id = s.id\n        INNER JOIN feeds f ON f.source_id = s.id\n        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n        WHERE\n            COALESCE(i.cluster_id, i.id) IN (SELECT entity_id FROM anchor_entities)\n        GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score\n        ORDER BY i.published_at DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "feed_ids!",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "link",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "author",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "published_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "cluster_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "is_read?",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "liked?",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 11,
+        "name": "prediction_score?",
+        "type_info": "Float4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Bool",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      null,
+      false
+    ]
+  },
+  "hash": "e4ee5b02b84a48c0d9e6b15bea7b097e01003bc0731e07ee64abd4c3aed84c2f"
+}

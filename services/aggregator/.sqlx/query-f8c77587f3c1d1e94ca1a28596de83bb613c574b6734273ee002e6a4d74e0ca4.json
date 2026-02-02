@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT\n                    i.id as \"id!\",\n                    array_agg(f.id) as \"feed_ids!\",\n                    i.title, i.link, i.content, i.author,\n                    i.published_at, i.cluster_id, i.created_at,\n                    ir.is_read as \"is_read?\",\n                    ROUND(COALESCE(ir.liked, 0.0))::REAL as \"liked?\"\n                FROM items i\n                INNER JOIN sources s ON i.source_id = s.id\n                INNER JOIN feeds f ON f.source_id = s.id\n                INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id\n                LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n                WHERE fs.user_id = $1\n                GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked\n                ORDER BY i.published_at DESC\n                LIMIT $2\n                ",
+  "query": "\n                SELECT\n                    i.id as \"id!\",\n                    ARRAY[$2::uuid] as \"feed_ids!\",\n                    i.title, i.link, i.content, i.author,\n                    i.published_at, i.cluster_id, i.created_at,\n                    ir.is_read as \"is_read?\",\n                    ROUND(COALESCE(ir.liked, 0.0))::REAL as \"liked?\",\n                    ip.score as \"prediction_score?\"\n                FROM items i\n                INNER JOIN feeds f ON i.source_id = f.source_id\n                LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n                WHERE f.id = $2 AND i.published_at < $3\n                ORDER BY i.published_at DESC\n                LIMIT $4\n                ",
   "describe": {
     "columns": [
       {
@@ -57,11 +57,18 @@
         "ordinal": 10,
         "name": "liked?",
         "type_info": "Float4"
+      },
+      {
+        "ordinal": 11,
+        "name": "prediction_score?",
+        "type_info": "Float4"
       }
     ],
     "parameters": {
       "Left": [
         "Uuid",
+        "Uuid",
+        "Timestamptz",
         "Int8"
       ]
     },
@@ -76,8 +83,9 @@
       true,
       true,
       false,
-      null
+      null,
+      false
     ]
   },
-  "hash": "4649e58551026013dec269fc0b46107b3f45d66c987adb8a1f3e073aebcb5fe0"
+  "hash": "f8c77587f3c1d1e94ca1a28596de83bb613c574b6734273ee002e6a4d74e0ca4"
 }
