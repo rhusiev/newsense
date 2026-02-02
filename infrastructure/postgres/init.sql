@@ -70,6 +70,13 @@ CREATE TABLE IF NOT EXISTS item_reads (
     PRIMARY KEY (user_id, item_id)
 );
 
+CREATE TABLE IF NOT EXISTS user_preference_models (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    model_state BYTEA NOT NULL,
+    last_trained_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    training_cursor TIMESTAMP WITH TIME ZONE
+);
+
 CREATE TABLE IF NOT EXISTS feed_subscriptions (
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     feed_id UUID REFERENCES feeds(id) ON DELETE CASCADE,
