@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import io
 from typing import Optional
 
 import asyncpg
@@ -16,8 +17,10 @@ from config import (
     QUEUE_NAME,
     BATCH_SIZE,
     RECONCILIATION_INTERVAL_MINUTES,
+    TRAINING_INTERVAL_MINUTES,
 )
 from clustering import process_item_logic
+from train_preference_model import train_model_core, parse_embedding_string
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("clustering-service")
@@ -105,6 +108,103 @@ async def reconciliation_worker():
             logger.error(f"Reconciliation error: {e}")
 
 
+async def training_worker():
+    interval_seconds = TRAINING_INTERVAL_MINUTES * 60
+    logger.info("Starting training worker...")
+
+    while not shutdown_event.is_set():
+        try:
+            await asyncio.sleep(interval_seconds)
+            
+            async with db_pool.acquire() as conn:
+                # Find users who need training
+                users_to_train = await conn.fetch("""
+                    SELECT 
+                        DISTINCT ir.user_id,
+                        MAX(ir.marked_at) as latest_activity,
+                        upm.training_cursor
+                    FROM item_reads ir
+                    LEFT JOIN user_preference_models upm ON ir.user_id = upm.user_id
+                    WHERE ir.liked IS NOT NULL
+                    GROUP BY ir.user_id, upm.training_cursor
+                    HAVING upm.training_cursor IS NULL OR MAX(ir.marked_at) > upm.training_cursor
+                """)
+                
+                if not users_to_train:
+                    continue
+                    
+                logger.info(f"Found {len(users_to_train)} users needing model updates")
+                
+                for row in users_to_train:
+                    user_id = str(row["user_id"])
+                    latest_activity = row["latest_activity"]
+                    
+                    # Fetch training data
+                    data_rows = await conn.fetch("""
+                        SELECT 
+                            i.embedding, 
+                            i.l6_embedding, 
+                            ir.liked
+                        FROM item_reads ir
+                        JOIN items i ON ir.item_id = i.id
+                        WHERE ir.user_id = $1 
+                          AND ir.liked IS NOT NULL 
+                          AND i.embedding IS NOT NULL
+                    """, row["user_id"])
+                    
+                    if len(data_rows) < 10:
+                        logger.info(f"User {user_id} has insufficient data ({len(data_rows)}), skipping")
+                        continue
+                        
+                    embeddings = []
+                    aug_embeddings = []
+                    labels = []
+                    
+                    for dr in data_rows:
+                        embeddings.append(parse_embedding_string(dr["embedding"]))
+                        if dr["l6_embedding"]:
+                            aug_embeddings.append(parse_embedding_string(dr["l6_embedding"]))
+                        labels.append(float(dr["liked"]))
+                        
+                    embeddings = np.array(embeddings)
+                    labels = np.array(labels)
+                    middle_embeddings = np.array(aug_embeddings) if aug_embeddings else None
+                    
+                    # Run training in thread pool to avoid blocking async loop
+                    logger.info(f"Training model for user {user_id}...")
+                    try:
+                        result = await asyncio.to_thread(
+                            train_model_core,
+                            embeddings, 
+                            labels, 
+                            middle_embeddings,
+                            verbose=False
+                        )
+                        
+                        # Serialize model
+                        buffer = io.BytesIO()
+                        torch.save(result["model_state"], buffer)
+                        model_bytes = buffer.getvalue()
+                        
+                        # Save to DB
+                        await conn.execute("""
+                            INSERT INTO user_preference_models (user_id, model_state, last_trained_at, training_cursor)
+                            VALUES ($1, $2, NOW(), $3)
+                            ON CONFLICT (user_id) 
+                            DO UPDATE SET 
+                                model_state = $2,
+                                last_trained_at = NOW(),
+                                training_cursor = $3
+                        """, row["user_id"], model_bytes, latest_activity)
+                        
+                        logger.info(f"Updated model for user {user_id}. Loss: {result['best_val_loss']:.4f}")
+                    except Exception as e:
+                        logger.error(f"Failed to train/save model for user {user_id}: {e}")
+
+        except Exception as e:
+            logger.error(f"Training worker error: {e}")
+
+
 async def startup():
     global db_pool, valkey_client, model, tokenizer
 
@@ -140,9 +240,10 @@ async def main():
 
     queue_task = asyncio.create_task(process_queue_consumer())
     reconciliation_task = asyncio.create_task(reconciliation_worker())
+    training_task = asyncio.create_task(training_worker())
 
     try:
-        await asyncio.gather(queue_task, reconciliation_task)
+        await asyncio.gather(queue_task, reconciliation_task, training_task)
     except KeyboardInterrupt:
         logger.info("Received shutdown signal")
     finally:

@@ -91,10 +91,10 @@ def load_user_data(csv_path: Path, augment_cols: list[str] = None):
     return np.array(embeddings), np.array(labels), None
 
 
-def train_user_model(
-    user_id: str, 
-    csv_path: Path, 
-    use_weights: bool = True,
+def train_model_core(
+    embeddings: np.ndarray,
+    labels: np.ndarray,
+    middle_embeddings: np.ndarray = None,
     # Model Config
     hidden_dims: list = [256, 128],
     dropout: float = 0.4,
@@ -102,7 +102,7 @@ def train_user_model(
     # Training Config
     use_input_norm: bool = True,
     use_scheduler: bool = True,
-    augment_cols: list[str] = ["l6_embedding"],
+    use_weights: bool = True,
     seed: int = 42,
     verbose: bool = True
 ):
@@ -110,19 +110,6 @@ def train_user_model(
         torch.manual_seed(seed)
         np.random.seed(seed)
 
-    if verbose:
-        print(f"\n{'='*60}")
-        print(f"Training model for user {user_id} (Seed: {seed})")
-        print(f"Config: Dims={hidden_dims}, LN={use_layernorm}, Drop={dropout}, InNorm={use_input_norm}, Sched={use_scheduler}")
-        print(f"{'='*60}")
-    
-    load_result = load_user_data(csv_path, augment_cols)
-    if len(load_result) == 3:
-        embeddings, labels, middle_embeddings = load_result
-    else:
-        embeddings, labels = load_result
-        middle_embeddings = None
-    
     # Normalize embeddings
     if use_input_norm:
         embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
@@ -139,7 +126,8 @@ def train_user_model(
         print("WARNING: Very few samples. Model may not train well.")
     
     if num_samples < 20:
-        print("Using all data for training (no validation split due to small dataset)")
+        if verbose:
+            print("Using all data for training (no validation split due to small dataset)")
         train_embeddings, train_labels = embeddings, labels
         val_embeddings, val_labels = embeddings[:5], labels[:5]
         
@@ -281,20 +269,57 @@ def train_user_model(
         per_class_mae[str(lbl)] = float(mae_lbl)
         if verbose:
             print(f"    Label {lbl:+.1f}: {mae_lbl:.4f} (n={np.sum(mask)})")
-    
-    if verbose:
-        user_model_dir = MODEL_OUTPUT_DIR / user_id
-        user_model_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(model.state_dict(), user_model_dir / "model.pt")
-        # Metadata saving omitted for brevity in benchmark mode, 
-        # but in normal mode it would be here.
-        print(f"\nModel saved to {user_model_dir}/model.pt")
 
     return {
+        "model_state": best_model_state if best_model_state else model.state_dict(),
         "best_val_loss": best_val_loss,
         "val_mae": val_mae,
         "per_class_mae": per_class_mae
     }
+
+
+def train_user_model(
+    user_id: str, 
+    csv_path: Path, 
+    use_weights: bool = True,
+    # Model Config
+    hidden_dims: list = [256, 128],
+    dropout: float = 0.4,
+    use_layernorm: bool = True,
+    # Training Config
+    use_input_norm: bool = True,
+    use_scheduler: bool = True,
+    augment_cols: list[str] = ["l6_embedding"],
+    seed: int = 42,
+    verbose: bool = True
+):
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"Training model for user {user_id} (Seed: {seed})")
+        print(f"Config: Dims={hidden_dims}, LN={use_layernorm}, Drop={dropout}, InNorm={use_input_norm}, Sched={use_scheduler}")
+        print(f"{'='*60}")
+    
+    load_result = load_user_data(csv_path, augment_cols)
+    if len(load_result) == 3:
+        embeddings, labels, middle_embeddings = load_result
+    else:
+        embeddings, labels = load_result
+        middle_embeddings = None
+    
+    result = train_model_core(
+        embeddings, labels, middle_embeddings,
+        hidden_dims=hidden_dims, dropout=dropout, use_layernorm=use_layernorm,
+        use_input_norm=use_input_norm, use_scheduler=use_scheduler, use_weights=use_weights,
+        seed=seed, verbose=verbose
+    )
+    
+    if verbose:
+        user_model_dir = MODEL_OUTPUT_DIR / user_id
+        user_model_dir.mkdir(parents=True, exist_ok=True)
+        torch.save(result["model_state"], user_model_dir / "model.pt")
+        print(f"\nModel saved to {user_model_dir}/model.pt")
+
+    return result
 
 
 def run_benchmark():
