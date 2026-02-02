@@ -1,8 +1,5 @@
 import asyncio
 import logging
-import os
-import io
-from typing import Optional
 
 import asyncpg
 import torch
@@ -22,14 +19,15 @@ from embeddings.config import (
 from embeddings.clustering import process_item_logic
 from embeddings.utils import encode_texts
 from embeddings.training import train_user_preference_model, get_users_needing_training
+from embeddings.predictions import load_all_models
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("clustering-service")
 
-db_pool: Optional[asyncpg.Pool] = None
-valkey_client: Optional[aioredis.Redis] = None
-model: Optional[AutoModel] = None
-tokenizer: Optional[AutoTokenizer] = None
+db_pool: asyncpg.Pool | None = None
+valkey_client: aioredis.Redis | None = None
+model: AutoModel | None = None
+tokenizer: AutoTokenizer | None = None
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 shutdown_event = asyncio.Event()
 
@@ -124,6 +122,9 @@ async def startup():
     logger.info("Connecting to database...")
     db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
     logger.info("Database connected")
+
+    async with db_pool.acquire() as conn:
+        await load_all_models(conn)
 
     logger.info("Connecting to Valkey...")
     valkey_client = await aioredis.from_url(VALKEY_URL, decode_responses=False)

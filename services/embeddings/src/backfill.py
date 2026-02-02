@@ -10,6 +10,8 @@ from embeddings.config import DATABASE_URL, EMBEDDING_MODEL_NAME, BATCH_SIZE
 from embeddings.clustering import process_item_logic
 from embeddings.utils import encode_texts
 from embeddings.training import train_user_preference_model, get_users_needing_training
+from embeddings.predictions import load_all_models, generate_predictions_for_item
+from embeddings.models import parse_embedding_string
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("backfill")
@@ -37,23 +39,21 @@ async def run_backfill():
 
     try:
         async with pool.acquire() as conn:
+            await load_all_models(conn)
+
             count = await conn.fetchval(
                 "SELECT count(*) FROM items WHERE l6_embedding IS NULL"
             )
-
             if count > 0:
                 print(f"Found {count} items needing L6 embeddings.")
-                pbar = tqdm(total=count, desc="Items")
-
+                pbar = tqdm(total=count, desc="Embeddings")
                 while True:
                     rows = await conn.fetch(
                         "SELECT id FROM items WHERE l6_embedding IS NULL LIMIT $1",
                         BATCH_SIZE,
                     )
-
                     if not rows:
                         break
-
                     for row in rows:
                         try:
                             await process_item_logic(
@@ -61,26 +61,60 @@ async def run_backfill():
                             )
                         except Exception as e:
                             print(f"Error processing {row['id']}: {e}")
-
                         pbar.update(1)
                 pbar.close()
-            else:
-                print("No items needing L6 embeddings.")
 
             print("\nChecking for users needing model training...")
             users_to_train = await get_users_needing_training(conn, force_all=True)
-
             if users_to_train:
                 print(f"Found {len(users_to_train)} users to train.")
-                pbar = tqdm(total=len(users_to_train), desc="Users")
+                pbar = tqdm(total=len(users_to_train), desc="Training")
                 for row in users_to_train:
                     await train_user_preference_model(
                         conn, row["user_id"], row["latest_activity"]
                     )
                     pbar.update(1)
                 pbar.close()
+
+            print("\nChecking for items needing predictions...")
+            predict_count = await conn.fetchval("""
+                SELECT count(*) FROM items i 
+                WHERE i.embedding IS NOT NULL 
+                AND NOT EXISTS (SELECT 1 FROM item_predictions ip WHERE ip.item_id = i.id)
+            """)
+
+            if predict_count > 0:
+                print(f"Found {predict_count} items potentially missing predictions.")
+                pbar = tqdm(total=predict_count, desc="Predictions")
+                while True:
+                    rows = await conn.fetch(
+                        """
+                        SELECT id, source_id, embedding, l6_embedding FROM items i
+                        WHERE i.embedding IS NOT NULL 
+                        AND NOT EXISTS (SELECT 1 FROM item_predictions ip WHERE ip.item_id = i.id)
+                        LIMIT $1
+                    """,
+                        BATCH_SIZE,
+                    )
+                    if not rows:
+                        break
+                    for row in rows:
+                        try:
+                            emb = parse_embedding_string(row["embedding"])
+                            l6_emb = (
+                                parse_embedding_string(row["l6_embedding"])
+                                if row["l6_embedding"]
+                                else emb
+                            )
+                            await generate_predictions_for_item(
+                                conn, str(row["id"]), str(row["source_id"]), emb, l6_emb
+                            )
+                        except Exception as e:
+                            print(f"Error predicting for {row['id']}: {e}")
+                        pbar.update(1)
+                pbar.close()
             else:
-                print("No users to train.")
+                print("No items needing prediction backfill.")
 
     finally:
         await pool.close()

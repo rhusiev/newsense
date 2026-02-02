@@ -103,9 +103,13 @@ async def update_item_with_cluster(
     )
 
 
+from .predictions import generate_predictions_for_item
+
+
 async def process_item_logic(conn, encode_fn, item_id: str):
     row = await conn.fetchrow(
-        "SELECT title, content, published_at FROM items WHERE id = $1", item_id
+        "SELECT title, content, published_at, source_id FROM items WHERE id = $1",
+        item_id,
     )
 
     if not row:
@@ -113,6 +117,7 @@ async def process_item_logic(conn, encode_fn, item_id: str):
 
     title = row["title"] or ""
     content = row["content"] or ""
+    source_id = row["source_id"]
 
     combined_final, combined_l6 = prepare_embeddings(title, content, encode_fn)
     embedding_list = combined_final.tolist()
@@ -128,3 +133,14 @@ async def process_item_logic(conn, encode_fn, item_id: str):
     await update_item_with_cluster(
         conn, item_id, embedding_list, l6_embedding_list, cluster_id
     )
+
+    try:
+        await generate_predictions_for_item(
+            conn, item_id, source_id, combined_final, combined_l6
+        )
+    except Exception as e:
+        import logging
+
+        logging.getLogger("clustering").error(
+            f"Failed to generate predictions for item {item_id}: {e}"
+        )

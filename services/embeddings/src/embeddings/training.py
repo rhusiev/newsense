@@ -9,6 +9,8 @@ from .models import train_model_core, parse_embedding_string
 logger = logging.getLogger("training-utils")
 
 
+from .predictions import update_model_state
+
 async def train_user_preference_model(
     conn: asyncpg.Connection, user_id_raw, latest_activity
 ):
@@ -54,6 +56,8 @@ async def train_user_preference_model(
         result = await asyncio.to_thread(
             train_model_core, embeddings, labels, middle_embeddings, verbose=False
         )
+
+        update_model_state(user_id, result["model_state"])
 
         buffer = io.BytesIO()
         torch.save(result["model_state"], buffer)
