@@ -4,7 +4,7 @@ import io
 import torch
 import numpy as np
 import asyncpg
-from train_preference_model import train_model_core, parse_embedding_string
+from .models import train_model_core, parse_embedding_string
 
 logger = logging.getLogger("training-utils")
 

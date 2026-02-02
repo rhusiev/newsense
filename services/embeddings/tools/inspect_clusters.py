@@ -3,9 +3,9 @@ import os
 import json
 import asyncpg
 from datetime import datetime
+from embeddings.config import DATABASE_URL
 
 # --- Config ---
-DATABASE_URL = os.getenv("DATABASE_URL", "postgres://user:pass@localhost/authdb")
 SHOW_INPUT_TEXT = True 
 
 # ANSI Colors

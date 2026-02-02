@@ -7,10 +7,10 @@ from transformers import AutoModel, AutoTokenizer
 import numpy as np
 from tqdm import tqdm
 
-from config import DATABASE_URL, EMBEDDING_MODEL_NAME, BATCH_SIZE
-from clustering import process_item_logic
-from shared_utils import encode_texts
-from training_utils import train_user_preference_model, get_users_needing_training
+from embeddings.config import DATABASE_URL, EMBEDDING_MODEL_NAME, BATCH_SIZE
+from embeddings.clustering import process_item_logic
+from embeddings.utils import encode_texts
+from embeddings.training import train_user_preference_model, get_users_needing_training
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("backfill")

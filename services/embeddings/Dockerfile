@@ -13,5 +13,6 @@ RUN find .venv -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true &
     find .venv -name "*.pyc" -delete
 
 ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app/src"
 
-CMD ["uv", "run", "python", "main.py"]
+CMD ["python", "src/main.py"]

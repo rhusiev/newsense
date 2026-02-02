@@ -2,8 +2,9 @@ import csv
 import numpy as np
 from pathlib import Path
 from collections import Counter
+from embeddings.config import TRAINING_DATA_DIR
 
-TRAINING_DATA_DIR = Path("./training_data")
+TRAINING_DATA_DIR = Path(TRAINING_DATA_DIR)
 
 
 def parse_embedding_string(embedding_str: str) -> np.ndarray:

@@ -1,6 +1,6 @@
 import datetime
 import spacy
-from config import (
+from .config import (
     DISTANCE_THRESHOLD,
     TIME_WINDOW_HOURS,
     TITLE_WEIGHT,

@@ -1,8 +1,7 @@
 import asyncio
 import os
 import asyncpg
-
-DATABASE_URL = os.getenv("DATABASE_URL", "postgres://user:pass@localhost:5432/authdb")
+from embeddings.config import DATABASE_URL
 
 
 async def get_article_details(conn, search_term):

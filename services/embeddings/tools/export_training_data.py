@@ -4,7 +4,7 @@ import asyncpg
 import argparse
 from datetime import datetime
 from pathlib import Path
-from config import DATABASE_URL
+from embeddings.config import DATABASE_URL
 
 EXPORT_DIR = Path("./training_data")
 

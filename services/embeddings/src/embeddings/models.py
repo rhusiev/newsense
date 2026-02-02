@@ -6,11 +6,11 @@ from pathlib import Path
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 import json
-import argparse
+from .config import TRAINING_DATA_DIR, MODEL_OUTPUT_DIR, EMBEDDING_DIM
 
-TRAINING_DATA_DIR = Path("./training_data")
-MODEL_OUTPUT_DIR = Path("./preference_models")
-EMBEDDING_DIM = 384
+TRAINING_DATA_DIR = Path(TRAINING_DATA_DIR)
+MODEL_OUTPUT_DIR = Path(MODEL_OUTPUT_DIR)
+
 
 
 class PreferenceDataset(Dataset):
@@ -413,14 +413,3 @@ def train_all_users(use_weights: bool = True):
         # Default to "Big + Advanced" for production training
         train_user_model(user_id, csv_path, use_weights=use_weights)
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train user preference models.")
-    parser.add_argument("--no-weights", action="store_true", help="Disable class weighting")
-    parser.add_argument("--benchmark", action="store_true", help="Run model comparison benchmark")
-    args = parser.parse_args()
-    
-    if args.benchmark:
-        run_benchmark()
-    else:
-        train_all_users(use_weights=not args.no_weights)

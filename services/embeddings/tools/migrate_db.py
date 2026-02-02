@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import asyncpg
-from config import DATABASE_URL
+from embeddings.config import DATABASE_URL
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("db-migration")

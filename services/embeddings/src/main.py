@@ -10,7 +10,7 @@ from redis import asyncio as aioredis
 from transformers import AutoModel, AutoTokenizer
 import numpy as np
 
-from config import (
+from embeddings.config import (
     DATABASE_URL,
     VALKEY_URL,
     EMBEDDING_MODEL_NAME,
@@ -19,9 +19,9 @@ from config import (
     RECONCILIATION_INTERVAL_MINUTES,
     TRAINING_INTERVAL_MINUTES,
 )
-from clustering import process_item_logic
-from shared_utils import encode_texts
-from training_utils import train_user_preference_model, get_users_needing_training
+from embeddings.clustering import process_item_logic
+from embeddings.utils import encode_texts
+from embeddings.training import train_user_preference_model, get_users_needing_training
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("clustering-service")
