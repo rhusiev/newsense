@@ -4,9 +4,9 @@ import os
 from typing import Optional
 
 import asyncpg
+import torch
 from redis import asyncio as aioredis
-from optimum.onnxruntime import ORTModelForFeatureExtraction
-from transformers import AutoTokenizer
+from transformers import AutoModel, AutoTokenizer
 import numpy as np
 
 from config import (
@@ -16,7 +16,6 @@ from config import (
     QUEUE_NAME,
     BATCH_SIZE,
     RECONCILIATION_INTERVAL_MINUTES,
-    EMBEDDING_MODEL_PATH,
 )
 from clustering import process_item_logic
 
@@ -25,29 +24,40 @@ logger = logging.getLogger("clustering-service")
 
 db_pool: Optional[asyncpg.Pool] = None
 valkey_client: Optional[aioredis.Redis] = None
-model: Optional[ORTModelForFeatureExtraction] = None
+model: Optional[AutoModel] = None
 tokenizer: Optional[AutoTokenizer] = None
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 shutdown_event = asyncio.Event()
 
 
-def mean_pooling(model_output, attention_mask):
-    token_embeddings = model_output[0]
+def mean_pooling(token_embeddings, attention_mask):
     input_mask_expanded = np.expand_dims(attention_mask, axis=-1).astype(float)
     return np.sum(token_embeddings * input_mask_expanded, axis=1) / np.clip(
         np.sum(input_mask_expanded, axis=1), a_min=1e-9, a_max=None
     )
 
 
-def encode_texts(texts: list[str]) -> np.ndarray:
+def encode_texts(texts: list[str]) -> tuple[np.ndarray, np.ndarray]:
     encoded_input = tokenizer(
-        texts, padding=True, truncation=True, return_tensors="np", max_length=512
-    )
+        texts, padding=True, truncation=True, return_tensors="pt", max_length=512
+    ).to(device)
 
-    model_output = model(**encoded_input)
-    embeddings = mean_pooling(model_output, encoded_input["attention_mask"])
-
+    with torch.no_grad():
+        model_output = model(**encoded_input, output_hidden_states=True)
+    
+    last_hidden = model_output.last_hidden_state.cpu().numpy()
+    attention_mask = encoded_input["attention_mask"].cpu().numpy()
+    
+    embeddings = mean_pooling(last_hidden, attention_mask)
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    return embeddings / norms
+    final_embeddings = embeddings / norms
+
+    l6_hidden = model_output.hidden_states[6].cpu().numpy()
+    l6_embeddings = mean_pooling(l6_hidden, attention_mask)
+    l6_norms = np.linalg.norm(l6_embeddings, axis=1, keepdims=True)
+    l6_final = l6_embeddings / l6_norms
+
+    return final_embeddings, l6_final
 
 
 async def process_queue_consumer():
@@ -79,7 +89,7 @@ async def reconciliation_worker():
 
             async with db_pool.acquire() as conn:
                 unprocessed_ids = await conn.fetch(
-                    "SELECT id FROM items WHERE embedding IS NULL LIMIT $1", BATCH_SIZE
+                    "SELECT id FROM items WHERE l6_embedding IS NULL LIMIT $1", BATCH_SIZE
                 )
 
                 if unprocessed_ids:
@@ -98,32 +108,10 @@ async def reconciliation_worker():
 async def startup():
     global db_pool, valkey_client, model, tokenizer
 
-    logger.info(f"Checking for model at {EMBEDDING_MODEL_PATH}...")
-
-    if os.path.exists(EMBEDDING_MODEL_PATH) and os.path.exists(
-        os.path.join(EMBEDDING_MODEL_PATH, "model.onnx")
-    ):
-        logger.info(f"Loading existing local model from {EMBEDDING_MODEL_PATH}...")
-        model = ORTModelForFeatureExtraction.from_pretrained(
-            EMBEDDING_MODEL_PATH,
-            export=False,
-            provider="CPUExecutionProvider",
-        )
-        tokenizer = AutoTokenizer.from_pretrained(EMBEDDING_MODEL_PATH)
-    else:
-        logger.info(
-            f"Model not found locally. Downloading and exporting {EMBEDDING_MODEL_NAME}..."
-        )
-        model = ORTModelForFeatureExtraction.from_pretrained(
-            EMBEDDING_MODEL_NAME,
-            export=True,
-            provider="CPUExecutionProvider",
-        )
-        tokenizer = AutoTokenizer.from_pretrained(EMBEDDING_MODEL_NAME)
-
-        logger.info(f"Saving converted model to {EMBEDDING_MODEL_PATH}...")
-        model.save_pretrained(EMBEDDING_MODEL_PATH)
-        tokenizer.save_pretrained(EMBEDDING_MODEL_PATH)
+    logger.info(f"Loading model {EMBEDDING_MODEL_NAME} on {device}...")
+    tokenizer = AutoTokenizer.from_pretrained(EMBEDDING_MODEL_NAME)
+    model = AutoModel.from_pretrained(EMBEDDING_MODEL_NAME).to(device)
+    model.eval()
 
     logger.info("Model loaded")
 

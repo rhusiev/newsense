@@ -27,22 +27,31 @@ def extract_entities(title: str, content: str) -> str:
 
 
 def prepare_embeddings(title: str, content: str, encode_fn):
-    title_embedding = encode_fn([f"passage: {title}"])[0]
-    content_embedding = encode_fn([f"passage: {content[:500]}"])[0]
+    # encode_fn now returns (final, l6)
+    title_final, title_l6 = encode_fn([f"passage: {title}"])
+    content_final, content_l6 = encode_fn([f"passage: {content[:500]}"])
 
     entity_text = extract_entities(title, content)
     if entity_text:
-        entity_embedding = encode_fn([f"passage: {entity_text}"])[0]
+        entity_final, entity_l6 = encode_fn([f"passage: {entity_text}"])
     else:
-        entity_embedding = content_embedding * 0.0
+        # Match shapes
+        entity_final = content_final * 0.0
+        entity_l6 = content_l6 * 0.0
 
-    combined_embedding = (
-        TITLE_WEIGHT * title_embedding
-        + CONTENT_WEIGHT * content_embedding
-        + ENTITY_WEIGHT * entity_embedding
+    combined_final = (
+        TITLE_WEIGHT * title_final[0]
+        + CONTENT_WEIGHT * content_final[0]
+        + ENTITY_WEIGHT * entity_final[0]
+    )
+    
+    combined_l6 = (
+        TITLE_WEIGHT * title_l6[0]
+        + CONTENT_WEIGHT * content_l6[0]
+        + ENTITY_WEIGHT * entity_l6[0]
     )
 
-    return combined_embedding
+    return combined_final, combined_l6
 
 
 async def find_matching_cluster(
@@ -80,15 +89,16 @@ async def create_cluster(
 
 
 async def update_item_with_cluster(
-    conn, item_id: str, embedding_list: list, cluster_id: str
+    conn, item_id: str, embedding_list: list, l6_embedding_list: list, cluster_id: str
 ):
     await conn.execute(
         """
         UPDATE items 
-        SET embedding = $1, cluster_id = $2
-        WHERE id = $3
+        SET embedding = $1, l6_embedding = $2, cluster_id = $3
+        WHERE id = $4
         """,
         str(embedding_list),
+        str(l6_embedding_list),
         cluster_id,
         item_id,
     )
@@ -105,8 +115,9 @@ async def process_item_logic(conn, encode_fn, item_id: str):
     title = row["title"] or ""
     content = row["content"] or ""
 
-    combined_embedding = prepare_embeddings(title, content, encode_fn)
-    embedding_list = combined_embedding.tolist()
+    combined_final, combined_l6 = prepare_embeddings(title, content, encode_fn)
+    embedding_list = combined_final.tolist()
+    l6_embedding_list = combined_l6.tolist()
 
     reference_time = row["published_at"] or datetime.datetime.now(datetime.timezone.utc)
 
@@ -115,4 +126,4 @@ async def process_item_logic(conn, encode_fn, item_id: str):
     if cluster_id is None:
         cluster_id = await create_cluster(conn, embedding_list, title, reference_time)
 
-    await update_item_with_cluster(conn, item_id, embedding_list, cluster_id)
+    await update_item_with_cluster(conn, item_id, embedding_list, l6_embedding_list, cluster_id)

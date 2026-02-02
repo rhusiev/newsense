@@ -10,6 +10,7 @@ dependencies = [
     "optimum[onnxruntime]>=2.1.0",
     "python-dotenv>=1.2.1",
     "redis>=7.1.0",
+    "scikit-learn>=1.8.0",
     "spacy>=3.8.11",
     "tqdm>=4.66.0",
 ]

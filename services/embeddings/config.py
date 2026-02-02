@@ -6,7 +6,6 @@ VALKEY_URL = os.getenv("VALKEY_URL", "redis://localhost:6379")
 # clustering
 
 EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-small"
-EMBEDDING_MODEL_PATH = "./onnx_model_data"
 BATCH_SIZE = 50
 
 SIMILARITY_THRESHOLD = 0.94
