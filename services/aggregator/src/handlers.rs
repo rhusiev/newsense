@@ -7,13 +7,13 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::{
-    state::AppState,
     auth::AuthUser,
     models::{
         AllUnreadCountsResponse, ClusterResponse, ClusterStatusResponse, ErrorResponse,
         FeedUnreadCount, GetClustersQuery, GetItemsQuery, ItemResponse, MarkAllReadRequest,
         MarkAllReadResponse, ReadStatusResponse, UnreadCountResponse, UpdateItemStatusRequest,
     },
+    state::AppState,
 };
 
 pub async fn get_feed_items(
@@ -67,10 +67,12 @@ pub async fn get_feed_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
+                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN feeds f ON i.source_id = f.source_id
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE f.id = $2 AND i.published_at > $3
                 ORDER BY i.published_at ASC
                 LIMIT $4
@@ -93,10 +95,12 @@ pub async fn get_feed_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
+                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN feeds f ON i.source_id = f.source_id
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE f.id = $2 AND i.published_at < $3
                 ORDER BY i.published_at DESC
                 LIMIT $4
@@ -119,10 +123,12 @@ pub async fn get_feed_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
+                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN feeds f ON i.source_id = f.source_id
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE f.id = $2 AND (ir.is_read IS NULL OR ir.is_read = false)
                 ORDER BY i.published_at DESC
                 LIMIT $3
@@ -144,10 +150,12 @@ pub async fn get_feed_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
+                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN feeds f ON i.source_id = f.source_id
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE f.id = $2
                 ORDER BY i.published_at DESC
                 LIMIT $3
@@ -191,14 +199,16 @@ pub async fn get_all_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
+                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN sources s ON i.source_id = s.id
                 INNER JOIN feeds f ON f.source_id = s.id
                 INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE fs.user_id = $1 AND i.published_at < $2
-                GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked
+                GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
                 ORDER BY i.published_at DESC
                 LIMIT $3
                 "#,
@@ -215,14 +225,16 @@ pub async fn get_all_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
+                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN sources s ON i.source_id = s.id
                 INNER JOIN feeds f ON f.source_id = s.id
                 INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE fs.user_id = $1 AND (ir.is_read IS NULL OR ir.is_read = false)
-                GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked
+                GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
                 ORDER BY i.published_at DESC
                 LIMIT $2
                 "#,
@@ -239,14 +251,16 @@ pub async fn get_all_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
+                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN sources s ON i.source_id = s.id
                 INNER JOIN feeds f ON f.source_id = s.id
                 INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE fs.user_id = $1
-                GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked
+                GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
                 ORDER BY i.published_at DESC
                 LIMIT $2
                 "#,
@@ -613,14 +627,16 @@ pub async fn get_clusters(
             i.title, i.link, i.content, i.author,
             i.published_at, i.cluster_id, i.created_at,
             ir.is_read as "is_read?",
-            ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
+            ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+            ip.score as "prediction_score?"
         FROM items i
         INNER JOIN sources s ON i.source_id = s.id
         INNER JOIN feeds f ON f.source_id = s.id
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE
             COALESCE(i.cluster_id, i.id) IN (SELECT entity_id FROM anchor_entities)
-        GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked
+        GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
         ORDER BY i.published_at DESC
         "#,
         user_id,
@@ -819,14 +835,16 @@ pub async fn get_feed_clusters(
             i.title, i.link, i.content, i.author,
             i.published_at, i.cluster_id, i.created_at,
             ir.is_read as "is_read?",
-            ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?"
+            ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+            ip.score as "prediction_score?"
         FROM items i
         INNER JOIN sources s ON i.source_id = s.id
         INNER JOIN feeds f ON f.source_id = s.id
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE
             COALESCE(i.cluster_id, i.id) IN (SELECT entity_id FROM anchor_entities)
-        GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked
+        GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
         ORDER BY i.published_at DESC
         "#,
         user_id,
@@ -940,7 +958,14 @@ pub async fn mark_feed_clusters_read(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
 
     Ok(Json(MarkAllReadResponse {
         marked_count: result.rows_affected() as i64,

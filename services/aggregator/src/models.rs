@@ -47,6 +47,7 @@ pub struct ItemResponse {
     pub created_at: Option<time::OffsetDateTime>,
     pub is_read: Option<bool>,
     pub liked: Option<f32>,
+    pub prediction_score: Option<f32>,
 }
 
 #[derive(Serialize)]
