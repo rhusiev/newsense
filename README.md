@@ -7,6 +7,10 @@ cargo install sqlx-cli
 cargo sqlx prepare
 ```
 
+```sh
+docker exec -it newsense_db psql -U newsense_user -d newsense_db
+```
+
 ```sql
 BEGIN;
 UPDATE items 
