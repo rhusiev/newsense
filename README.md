@@ -23,3 +23,13 @@ SET embedding = NULL,
 DELETE FROM clusters;
 COMMIT;
 ```
+
+TODO:
+- no volume mounts for prod
+- reorder
+- folders
+- OPML
+- set update frequency
+- get liked
+- search articles
+- fix versioning and interaction about it with web
