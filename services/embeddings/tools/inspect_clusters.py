@@ -5,10 +5,8 @@ import asyncpg
 from datetime import datetime
 from embeddings.config import DATABASE_URL
 
-# --- Config ---
 SHOW_INPUT_TEXT = True 
 
-# ANSI Colors
 CYAN = "\033[96m"
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -29,7 +27,6 @@ async def inspect():
     try:
         print(f"{BOLD}Fetching clusters with > 1 items...{RESET}\n")
         
-        # FIXED SQL: Includes item_count and individual item distances
         rows = await conn.fetch("""
             SELECT 
                 c.id, 
@@ -72,11 +69,8 @@ async def inspect():
                 dist = item.get('distance') or 0.0
                 source = item.get('source') or "Unknown"
                 
-                # Similarity is 1 - Distance
                 similarity = 1 - dist
                 
-                # Color code the distance to help you tune
-                # Distances > 0.10 are risky for "Same Event" news
                 dist_color = GREEN if dist < 0.08 else (YELLOW if dist < 0.12 else RED)
 
                 print(f"  • [{GREEN}{source}{RESET}] {BOLD}{title}{RESET}")

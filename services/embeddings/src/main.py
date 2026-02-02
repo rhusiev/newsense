@@ -67,7 +67,8 @@ async def reconciliation_worker():
 
             async with db_pool.acquire() as conn:
                 unprocessed_ids = await conn.fetch(
-                    "SELECT id FROM items WHERE l6_embedding IS NULL LIMIT $1", BATCH_SIZE
+                    "SELECT id FROM items WHERE l6_embedding IS NULL LIMIT $1",
+                    BATCH_SIZE,
                 )
 
                 if unprocessed_ids:
@@ -76,7 +77,9 @@ async def reconciliation_worker():
                     )
 
                     for row in unprocessed_ids:
-                        await process_item_logic(conn, encode_texts_wrapper, str(row["id"]))
+                        await process_item_logic(
+                            conn, encode_texts_wrapper, str(row["id"])
+                        )
                         logger.info(f"Reconciliation processed: {row['id']}")
 
         except Exception as e:
@@ -90,17 +93,19 @@ async def training_worker():
     while not shutdown_event.is_set():
         try:
             await asyncio.sleep(interval_seconds)
-            
+
             async with db_pool.acquire() as conn:
                 users_to_train = await get_users_needing_training(conn)
-                
+
                 if not users_to_train:
                     continue
-                    
+
                 logger.info(f"Found {len(users_to_train)} users needing model updates")
-                
+
                 for row in users_to_train:
-                    await train_user_preference_model(conn, row["user_id"], row["latest_activity"])
+                    await train_user_preference_model(
+                        conn, row["user_id"], row["latest_activity"]
+                    )
 
         except Exception as e:
             logger.error(f"Training worker error: {e}")

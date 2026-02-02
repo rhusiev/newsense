@@ -27,7 +27,6 @@ def extract_entities(title: str, content: str) -> str:
 
 
 def prepare_embeddings(title: str, content: str, encode_fn):
-    # encode_fn now returns (final, l6)
     title_final, title_l6 = encode_fn([f"passage: {title}"])
     content_final, content_l6 = encode_fn([f"passage: {content[:500]}"])
 
@@ -44,7 +43,7 @@ def prepare_embeddings(title: str, content: str, encode_fn):
         + CONTENT_WEIGHT * content_final[0]
         + ENTITY_WEIGHT * entity_final[0]
     )
-    
+
     combined_l6 = (
         TITLE_WEIGHT * title_l6[0]
         + CONTENT_WEIGHT * content_l6[0]
@@ -126,4 +125,6 @@ async def process_item_logic(conn, encode_fn, item_id: str):
     if cluster_id is None:
         cluster_id = await create_cluster(conn, embedding_list, title, reference_time)
 
-    await update_item_with_cluster(conn, item_id, embedding_list, l6_embedding_list, cluster_id)
+    await update_item_with_cluster(
+        conn, item_id, embedding_list, l6_embedding_list, cluster_id
+    )

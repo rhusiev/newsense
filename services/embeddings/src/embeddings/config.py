@@ -4,7 +4,6 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgres://user:pass@localhost:5432/au
 VALKEY_URL = os.getenv("VALKEY_URL", "redis://localhost:6379")
 
 # clustering
-
 EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-small"
 BATCH_SIZE = 50
 
@@ -17,7 +16,9 @@ CONTENT_WEIGHT = 0.1
 ENTITY_WEIGHT = 0.05
 
 QUEUE_NAME = "article_embeddings"
-RECONCILIATION_INTERVAL_MINUTES = int(os.getenv("RECONCILIATION_INTERVAL_MINUTES", "10"))
+RECONCILIATION_INTERVAL_MINUTES = int(
+    os.getenv("RECONCILIATION_INTERVAL_MINUTES", "10")
+)
 TRAINING_INTERVAL_MINUTES = int(os.getenv("TRAINING_INTERVAL_MINUTES", "30"))
 
 # preference
