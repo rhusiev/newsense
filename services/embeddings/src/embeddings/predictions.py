@@ -103,7 +103,7 @@ async def generate_predictions_for_item(
                     else:
                         score = model(input_384).item()
 
-            predictions.append((row["user_id"], item_id, float(score)))
+            predictions.append((row["user_id"], item_id, float(min(max(score, -1), 1))))
         except Exception as e:
             logger.error(f"Error predicting for user {user_id}: {e}")
 
@@ -117,4 +117,3 @@ async def generate_predictions_for_item(
             predictions,
         )
         logger.info(f"Generated {len(predictions)} predictions for item {item_id}")
-
