@@ -37,7 +37,11 @@ class PreferenceDataset(Dataset):
 
 class UserPreferenceHead(nn.Module):
     def __init__(
-        self, embedding_dim=384, hidden_dims=[256, 128], dropout=0.4, use_layernorm=True
+        self,
+        embedding_dim=EMBEDDING_DIM,
+        hidden_dims=[256, 128],
+        dropout=0.4,
+        use_layernorm=True,
     ):
         super().__init__()
         layers = []
@@ -98,12 +102,11 @@ def train_model_core(
     embeddings: np.ndarray,
     labels: np.ndarray,
     middle_embeddings: np.ndarray = None,
+    initial_state: dict = None,
+    sample_weights: np.ndarray = None,
     hidden_dims: list = [256, 128],
     dropout: float = 0.4,
     use_layernorm: bool = True,
-    use_input_norm: bool = True,
-    use_scheduler: bool = True,
-    use_weights: bool = True,
     seed: int = 42,
     verbose: bool = True,
 ):
@@ -111,92 +114,85 @@ def train_model_core(
         torch.manual_seed(seed)
         np.random.seed(seed)
 
-    if use_input_norm:
-        embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
-        if middle_embeddings is not None:
-            middle_embeddings = middle_embeddings / np.linalg.norm(
-                middle_embeddings, axis=1, keepdims=True
-            )
+    embeddings = embeddings / (np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-9)
+    if middle_embeddings is not None:
+        middle_embeddings = middle_embeddings / (
+            np.linalg.norm(middle_embeddings, axis=1, keepdims=True) + 1e-9
+        )
 
     num_samples = len(labels)
 
-    if verbose:
-        print(f"Total samples: {num_samples}")
-        print(
-            f"Label distribution: {np.bincount(labels.astype(int) + 1, minlength=3)} ([-1, 0, 1])"
+    is_fine_tuning = initial_state is not None
+
+    if is_fine_tuning:
+        lr = 0.0002
+        num_epochs = 5
+        batch_size = 16
+        patience = 2
+        use_scheduler = False
+
+        dropout = min(dropout + 0.1, 0.5)
+
+    else:
+        lr = 0.001
+        num_epochs = 50
+        batch_size = 32
+        patience = 10
+        use_scheduler = True
+
+    if num_samples < 5:
+        return None
+
+    if is_fine_tuning:
+        train_embeddings, train_labels = embeddings, labels
+        train_middle = middle_embeddings
+        train_weights = (
+            sample_weights if sample_weights is not None else np.ones_like(labels)
         )
 
-    if num_samples < 10:
-        print("WARNING: Very few samples. Model may not train well.")
-
-    if num_samples < 20:
-        if verbose:
-            print(
-                "Using all data for training (no validation split due to small dataset)"
-            )
-        train_embeddings, train_labels = embeddings, labels
-        val_embeddings, val_labels = embeddings[:5], labels[:5]
-
-        if middle_embeddings is not None:
-            train_middle, val_middle = middle_embeddings, middle_embeddings[:5]
-        else:
-            train_middle, val_middle = None, None
+        val_embeddings, val_labels = embeddings, labels
+        val_middle = middle_embeddings
+        val_loader = DataLoader(
+            PreferenceDataset(val_embeddings, val_labels, None, val_middle),
+            batch_size=len(labels),
+        )
     else:
-        if middle_embeddings is not None:
-            (
-                train_embeddings,
-                val_embeddings,
-                train_labels,
-                val_labels,
-                train_middle,
-                val_middle,
-            ) = train_test_split(
-                embeddings,
-                labels,
-                middle_embeddings,
-                test_size=0.2,
-                random_state=seed,
-                stratify=labels,
-            )
-        else:
-            train_embeddings, val_embeddings, train_labels, val_labels = (
-                train_test_split(
-                    embeddings,
-                    labels,
-                    test_size=0.2,
-                    random_state=seed,
-                    stratify=labels,
-                )
-            )
+        split_data = train_test_split(
+            embeddings,
+            labels,
+            middle_embeddings
+            if middle_embeddings is not None
+            else np.zeros((len(labels), 1)),
+            sample_weights if sample_weights is not None else np.ones_like(labels),
+            test_size=0.2,
+            random_state=seed,
+            stratify=labels if len(np.unique(labels)) > 1 else None,
+        )
+        (
+            train_embeddings,
+            val_embeddings,
+            train_labels,
+            val_labels,
+            train_middle,
+            val_middle,
+            train_weights,
+            _,
+        ) = split_data
+
+        if middle_embeddings is None:
             train_middle, val_middle = None, None
 
-    if use_weights:
-        unique_labels, counts = np.unique(train_labels, return_counts=True)
-        class_weights = {
-            lbl: len(train_labels) / (len(unique_labels) * count)
-            for lbl, count in zip(unique_labels, counts)
-        }
-        train_sample_weights = np.array([class_weights[lbl] for lbl in train_labels])
-        if verbose:
-            print("Class weights:", {k: round(v, 4) for k, v in class_weights.items()})
-    else:
-        if verbose:
-            print("Class weights: Disabled (Uniform)")
-        train_sample_weights = None
+        val_dataset = PreferenceDataset(val_embeddings, val_labels, None, val_middle)
+        val_loader = DataLoader(val_dataset, batch_size=len(val_dataset))
 
     train_dataset = PreferenceDataset(
-        train_embeddings, train_labels, train_sample_weights, train_middle
+        train_embeddings, train_labels, train_weights, train_middle
     )
-    val_dataset = PreferenceDataset(val_embeddings, val_labels, None, val_middle)
-
-    train_loader = DataLoader(
-        train_dataset, batch_size=min(32, len(train_dataset)), shuffle=True
-    )
-    val_loader = DataLoader(val_dataset, batch_size=len(val_dataset))
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
     input_dim = EMBEDDING_DIM
     if middle_embeddings is not None:
-        input_dim = EMBEDDING_DIM + middle_embeddings.shape[1]
+        input_dim += middle_embeddings.shape[1]
 
     model = UserPreferenceHead(
         embedding_dim=input_dim,
@@ -204,56 +200,55 @@ def train_model_core(
         dropout=dropout,
         use_layernorm=use_layernorm,
     )
+
+    if initial_state:
+        model.load_state_dict(initial_state)
+
     criterion = nn.MSELoss(reduction="none")
-    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
 
     scheduler = None
     if use_scheduler:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.5, patience=5
+            optimizer, mode="min", factor=0.5, patience=3
         )
 
-    num_epochs = 100
     best_val_loss = float("inf")
-    patience = 15
     patience_counter = 0
     best_model_state = None
+
+    initial_val_loss = None
 
     for epoch in range(num_epochs):
         model.train()
         train_loss = 0.0
 
-        for batch_embeddings, batch_labels, batch_weights in train_loader:
+        for batch_e, batch_l, batch_w in train_loader:
             optimizer.zero_grad()
-            predictions = model(batch_embeddings)
-            raw_loss = criterion(predictions, batch_labels)
-            weighted_loss = (raw_loss * batch_weights).mean()
-            weighted_loss.backward()
+            preds = model(batch_e)
+            loss = (criterion(preds, batch_l) * batch_w).mean()
+            loss.backward()
             optimizer.step()
-            train_loss += weighted_loss.item()
+            train_loss += loss.item()
 
         train_loss /= len(train_loader)
 
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for batch_embeddings, batch_labels, _ in val_loader:
-                predictions = model(batch_embeddings)
-                loss = criterion(predictions, batch_labels).mean()
-                val_loss += loss.item()
+            for batch_e, batch_l, _ in val_loader:
+                preds = model(batch_e)
+                val_loss += criterion(preds, batch_l).mean().item()
 
-        val_loss /= len(val_loader)
+        if epoch == 0:
+            initial_val_loss = val_loss
+        if is_fine_tuning and val_loss > (initial_val_loss * 2.0) and val_loss > 0.2:
+            if verbose:
+                print(f"Loss exploded ({val_loss}), aborting fine-tuning")
+            return None
 
         if scheduler:
             scheduler.step(val_loss)
-
-        if verbose and (epoch + 1) % 10 == 0:
-            lr_str = (
-                f", LR = {optimizer.param_groups[0]['lr']:.6f}" if scheduler else ""
-            )
-            print(
-                f"Epoch {epoch + 1:3d}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}{lr_str}"
-            )
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -262,55 +257,15 @@ def train_model_core(
         else:
             patience_counter += 1
             if patience_counter >= patience:
-                if verbose:
-                    print(f"Early stopping at epoch {epoch + 1}")
                 break
 
     if best_model_state:
         model.load_state_dict(best_model_state)
 
-    model.eval()
-    with torch.no_grad():
-        if train_middle is not None:
-            train_combined = torch.cat(
-                [torch.FloatTensor(train_embeddings), torch.FloatTensor(train_middle)],
-                dim=1,
-            )
-            val_combined = torch.cat(
-                [torch.FloatTensor(val_embeddings), torch.FloatTensor(val_middle)],
-                dim=1,
-            )
-            train_preds = model(train_combined).numpy()
-            val_preds = model(val_combined).numpy()
-        else:
-            train_preds = model(torch.FloatTensor(train_embeddings)).numpy()
-            val_preds = model(torch.FloatTensor(val_embeddings)).numpy()
-
-    train_mae = np.mean(np.abs(train_preds - train_labels))
-    val_mae = np.mean(np.abs(val_preds - val_labels))
-
-    per_class_mae = {}
-    if verbose:
-        print(f"\nFinal Results:")
-        print(f"  Best Val Loss: {best_val_loss:.4f}")
-        print(f"  Train MAE: {train_mae:.4f}")
-        print(f"  Val MAE: {val_mae:.4f}")
-
-        print("\n  Per-label Val MAE:")
-
-    unique_val_labels = np.unique(val_labels)
-    for lbl in sorted(unique_val_labels):
-        mask = val_labels == lbl
-        mae_lbl = np.mean(np.abs(val_preds[mask] - val_labels[mask]))
-        per_class_mae[str(lbl)] = float(mae_lbl)
-        if verbose:
-            print(f"    Label {lbl:+.1f}: {mae_lbl:.4f} (n={np.sum(mask)})")
-
     return {
         "model_state": best_model_state if best_model_state else model.state_dict(),
         "best_val_loss": best_val_loss,
-        "val_mae": val_mae,
-        "per_class_mae": per_class_mae,
+        "is_fine_tuning": is_fine_tuning,
     }
 
 
