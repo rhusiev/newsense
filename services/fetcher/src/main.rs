@@ -70,6 +70,9 @@ async fn main() {
 
     tokio::spawn(scheduler_task(pool.clone(), tx.clone()));
 
+    info!("Error recovery task starting");
+    tokio::spawn(error_recovery_task(pool.clone()));
+
     let app = Router::new()
         .route("/feeds/{feed_id}/refresh", post(trigger_refresh))
         .with_state(app_state);
@@ -179,6 +182,39 @@ async fn worker_task(
                 error!("Failed to process feed {}: {}", feed_id, e);
             }
         });
+    }
+}
+
+async fn error_recovery_task(pool: PgPool) {
+    let recovery_interval_secs: u64 = 24 * 60 * 60;
+
+    info!("Error recovery task started. Runs daily.");
+
+    loop {
+        let result = sqlx::query!(
+            r#"
+            UPDATE sources
+            SET error_count = 4
+            WHERE error_count >= 5
+            "#
+        )
+        .execute(&pool)
+        .await;
+
+        match result {
+            Ok(res) => {
+                let rows_affected = res.rows_affected();
+                if rows_affected > 0 {
+                    info!(
+                        "Error recovery: Reset {} sources with >= 5 errors to 4",
+                        rows_affected
+                    );
+                }
+            }
+            Err(e) => error!("Error recovery DB error: {}", e),
+        }
+
+        tokio::time::sleep(Duration::from_secs(recovery_interval_secs)).await;
     }
 }
 
