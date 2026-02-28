@@ -52,7 +52,6 @@ pub struct ItemResponse {
 
 #[derive(Serialize)]
 pub struct ClusterResponse {
-    // cluster_id if exists, otherwise item_id
     pub id: Uuid,
     pub is_cluster: bool,
     #[serde(with = "time::serde::iso8601::option")]

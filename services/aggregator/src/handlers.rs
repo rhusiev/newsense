@@ -693,7 +693,7 @@ pub async fn get_clusters(
 pub async fn update_cluster_status(
     State(state): State<AppState>,
     AuthUser { id: user_id, .. }: AuthUser,
-    Path(id): Path<Uuid>, // cluster_id or item_id
+    Path(id): Path<Uuid>,
     Json(payload): Json<UpdateItemStatusRequest>,
 ) -> Result<Json<ClusterStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
     let result = sqlx::query!(

@@ -1,27 +1,27 @@
+use argon2::password_hash::rand_core::OsRng;
 use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
 };
 use axum::{
     Json,
-    extract::State,
-    http::{StatusCode},
+    extract::{Path, State},
+    http::StatusCode,
     response::IntoResponse,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as BASE64};
 use sha2::{Digest, Sha256};
+use sqlx::types::time::OffsetDateTime;
 use tower_sessions::{Session, cookie::time::Duration};
 use uuid::Uuid;
-use sqlx::types::time::OffsetDateTime;
-use argon2::password_hash::rand_core::OsRng;
 
 use crate::{
-    state::AppState,
     models::{AuthResponse, ErrorResponse, LoginRequest, RegisterRequest},
+    state::AppState,
     utils::{
-        build_cookie_value, generate_token_pair, parse_cookie_value,
-        REMEMBER_COOKIE_NAME, REMEMBER_DURATION_DAYS
+        REMEMBER_COOKIE_NAME, REMEMBER_DURATION_DAYS, build_cookie_value, generate_token_pair,
+        parse_cookie_value,
     },
 };
 
@@ -202,7 +202,14 @@ pub async fn login(
         response_jar = response_jar.add(cookie);
     }
 
-    Ok((response_jar, Json(AuthResponse { user_id, username, role })))
+    Ok((
+        response_jar,
+        Json(AuthResponse {
+            user_id,
+            username,
+            role,
+        }),
+    ))
 }
 
 pub async fn logout(
@@ -287,24 +294,26 @@ pub async fn current_user(
         }),
     ))?;
 
-    let user = sqlx::query_as::<_, (Uuid, String, i32)>("SELECT id, username, role FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "DB Error".to_string(),
-                }),
-            )
-        })?
-        .ok_or((
-            StatusCode::UNAUTHORIZED,
+    let user = sqlx::query_as::<_, (Uuid, String, i32)>(
+        "SELECT id, username, role FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: "User not found".to_string(),
+                error: "DB Error".to_string(),
             }),
-        ))?;
+        )
+    })?
+    .ok_or((
+        StatusCode::UNAUTHORIZED,
+        Json(ErrorResponse {
+            error: "User not found".to_string(),
+        }),
+    ))?;
 
     let role = user.2;
     session.insert("role", role).await.ok();
@@ -315,6 +324,149 @@ pub async fn current_user(
             user_id: user.0,
             username: user.1,
             role,
+        }),
+    ))
+}
+
+pub async fn register_with_code(
+    State(state): State<AppState>,
+    Path(code): axum::extract::Path<String>,
+    Json(payload): Json<RegisterRequest>,
+) -> Result<(StatusCode, Json<AuthResponse>), (StatusCode, Json<ErrorResponse>)> {
+    if payload.username.len() < 3 || payload.username.len() > 255 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Username must be 3-255 characters".to_string(),
+            }),
+        ));
+    }
+    if payload.password.len() < 8 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Password must be at least 8 characters".to_string(),
+            }),
+        ));
+    }
+
+    let code_exists = sqlx::query!("SELECT code FROM access_codes WHERE code = $1", code)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+
+    if code_exists.is_none() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "Invalid access code".to_string(),
+            }),
+        ));
+    }
+
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let password_hash = argon2
+        .hash_password(payload.password.as_bytes(), &salt)
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Hashing failed".to_string(),
+                }),
+            )
+        })?
+        .to_string();
+
+    let user_id = Uuid::new_v4();
+
+    let mut tx = state.db.begin().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    let code_delete = sqlx::query!("DELETE FROM access_codes WHERE code = $1", code)
+        .execute(&mut *tx)
+        .await;
+
+    match code_delete {
+        Ok(result) => {
+            if result.rows_affected() == 0 {
+                let _ = tx.rollback().await;
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(ErrorResponse {
+                        error: "Invalid or already used access code".to_string(),
+                    }),
+                ));
+            }
+        }
+        Err(e) => {
+            let _ = tx.rollback().await;
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            ));
+        }
+    }
+
+    let user_insert =
+        sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, $3)")
+            .bind(user_id)
+            .bind(&payload.username)
+            .bind(&password_hash)
+            .execute(&mut *tx)
+            .await;
+
+    if let Err(e) = user_insert {
+        let _ = tx.rollback().await;
+        if e.as_database_error()
+            .map(|x| x.is_unique_violation())
+            .unwrap_or(false)
+        {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(ErrorResponse {
+                    error: "Username taken".to_string(),
+                }),
+            ));
+        }
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Database error".to_string(),
+            }),
+        ));
+    }
+
+    tx.commit().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(AuthResponse {
+            user_id,
+            username: payload.username,
+            role: 0,
         }),
     ))
 }

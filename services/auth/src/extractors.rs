@@ -11,7 +11,6 @@ use crate::state::AppState;
 
 pub struct AuthUser {
     pub id: Uuid,
-    pub role: i32,
 }
 
 impl<S> FromRequestParts<S> for AuthUser
@@ -38,12 +37,9 @@ where
             }),
         ))?;
 
-        let role = session.get::<i32>("role").await.unwrap_or(Some(0));
-
         match user_id {
             Some(id) => Ok(AuthUser {
                 id,
-                role: role.unwrap_or(0),
             }),
             None => Err((
                 StatusCode::UNAUTHORIZED,

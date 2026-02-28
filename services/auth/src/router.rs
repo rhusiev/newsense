@@ -4,6 +4,7 @@ use crate::{state::AppState, handlers, admin};
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/register", post(handlers::register))
+        .route("/register/{code}", post(handlers::register_with_code))
         .route("/login", post(handlers::login))
         .route("/logout", post(handlers::logout))
         .route("/me", get(handlers::current_user))

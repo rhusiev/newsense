@@ -29,14 +29,14 @@ pub struct CreateCodesRequest {
 
 #[derive(Deserialize)]
 pub struct CreateCodeRequest {
-    pub name: String,
+    pub code: String,
 }
 
 #[derive(Serialize)]
 pub struct CodeResponse {
-    pub name: String,
-    pub password: Option<String>,
+    pub code: String,
 }
+
 
 #[derive(Serialize)]
 pub struct CodeCountResponse {
