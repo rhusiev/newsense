@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT code FROM access_codes ORDER BY created_at DESC",
+  "query": "DELETE FROM access_codes WHERE code = $1 RETURNING code",
   "describe": {
     "columns": [
       {
@@ -10,11 +10,13 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Text"
+      ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "603f045d552401c555d7554f6ea593820d35aa3868d3a417555ddbc16a77b29f"
+  "hash": "cf85ded64e14e6c0be934427509298954bc72db139876c2b248f4498727c3d5d"
 }

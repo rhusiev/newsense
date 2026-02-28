@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE access_codes SET uses_left = uses_left - 1 WHERE code = $1 AND uses_left > 0 RETURNING uses_left",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "uses_left",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "20302a287d0184ece19716514579b3b8bafcf50b4a15254e5c4317b0c7634ff4"
+}
