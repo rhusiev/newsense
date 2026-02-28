@@ -27,8 +27,10 @@ use crate::{
 
 pub async fn register(
     State(state): State<AppState>,
+    session: Session,
+    jar: CookieJar,
     Json(payload): Json<RegisterRequest>,
-) -> Result<(StatusCode, Json<AuthResponse>), (StatusCode, Json<ErrorResponse>)> {
+) -> Result<(StatusCode, CookieJar, Json<AuthResponse>), (StatusCode, Json<ErrorResponse>)> {
     if !state.registration_enabled {
         return Err((
             StatusCode::FORBIDDEN,
@@ -79,14 +81,35 @@ pub async fn register(
         .await;
 
     match result {
-        Ok(_) => Ok((
-            StatusCode::CREATED,
-            Json(AuthResponse {
-                user_id,
-                username: payload.username,
-                role: 0,
-            }),
-        )),
+        Ok(_) => {
+            session.insert("user_id", user_id).await.map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "Session creation failed".to_string(),
+                    }),
+                )
+            })?;
+
+            session.insert("role", 0).await.map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "Session update failed".to_string(),
+                    }),
+                )
+            })?;
+
+            Ok((
+                StatusCode::CREATED,
+                jar,
+                Json(AuthResponse {
+                    user_id,
+                    username: payload.username,
+                    role: 0,
+                }),
+            ))
+        }
         Err(e)
             if e.as_database_error()
                 .map(|x| x.is_unique_violation())
@@ -330,9 +353,11 @@ pub async fn current_user(
 
 pub async fn register_with_code(
     State(state): State<AppState>,
+    session: Session,
+    jar: CookieJar,
     Path(code): axum::extract::Path<String>,
     Json(payload): Json<RegisterRequest>,
-) -> Result<(StatusCode, Json<AuthResponse>), (StatusCode, Json<ErrorResponse>)> {
+) -> Result<(StatusCode, CookieJar, Json<AuthResponse>), (StatusCode, Json<ErrorResponse>)> {
     if payload.username.len() < 3 || payload.username.len() > 255 {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -461,8 +486,27 @@ pub async fn register_with_code(
         )
     })?;
 
+    session.insert("user_id", user_id).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Session creation failed".to_string(),
+            }),
+        )
+    })?;
+
+    session.insert("role", 0).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Session update failed".to_string(),
+            }),
+        )
+    })?;
+
     Ok((
         StatusCode::CREATED,
+        jar,
         Json(AuthResponse {
             user_id,
             username: payload.username,
