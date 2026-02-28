@@ -251,7 +251,10 @@ pub async fn logout(
                 .execute(&state.db)
                 .await;
         }
-        response_jar = response_jar.remove(Cookie::from(REMEMBER_COOKIE_NAME));
+        let mut c = Cookie::from(REMEMBER_COOKIE_NAME);
+        c.set_domain(state.cookie_domain.clone());
+        c.set_path("/");
+        response_jar = response_jar.remove(c);
     }
 
     (response_jar, StatusCode::NO_CONTENT)
@@ -301,8 +304,10 @@ pub async fn current_user(
 
                         c.set_secure(state.is_production);
 
+                        c.set_same_site(SameSite::Lax);
                         c.set_path("/");
                         c.set_max_age(Duration::days(REMEMBER_DURATION_DAYS));
+                        c.set_domain(state.cookie_domain.clone());
                         response_jar = response_jar.add(c);
                     }
                 }
