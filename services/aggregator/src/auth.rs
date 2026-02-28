@@ -9,7 +9,10 @@ use uuid::Uuid;
 
 use crate::models::ErrorResponse;
 
-pub struct AuthUser(pub Uuid);
+pub struct AuthUser {
+    pub id: Uuid,
+    pub role: i32,
+}
 
 impl<S> FromRequestParts<S> for AuthUser
 where
@@ -36,8 +39,13 @@ where
             )
         })?;
 
+        let role = session.get::<i32>("role").await.unwrap_or(Some(0));
+
         match user_id {
-            Some(id) => Ok(AuthUser(id)),
+            Some(id) => Ok(AuthUser {
+                id,
+                role: role.unwrap_or(0),
+            }),
             None => Err((
                 StatusCode::UNAUTHORIZED,
                 Json(ErrorResponse {

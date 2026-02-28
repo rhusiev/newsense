@@ -19,9 +19,33 @@ pub struct LoginRequest {
 pub struct AuthResponse {
     pub user_id: Uuid,
     pub username: String,
+    pub role: i32,
+}
+
+#[derive(Deserialize)]
+pub struct CreateCodesRequest {
+    pub count: usize,
+}
+
+#[derive(Deserialize)]
+pub struct CreateCodeRequest {
+    pub name: String,
+}
+
+#[derive(Serialize)]
+pub struct CodeResponse {
+    pub name: String,
+    pub password: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct CodeCountResponse {
+    pub count: i64,
 }
 
 #[derive(Serialize)]
 pub struct ErrorResponse {
     pub error: String,
 }
+
+

@@ -62,7 +62,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.auth.entrypoints=web"
-      - "traefik.http.routers.auth.rule=Host(`${API_DOMAIN}`) && PathPrefix(`/auth`)"
+      - "traefik.http.routers.auth.rule=Host(`${API_DOMAIN}`) && (PathPrefix(`/admin`) || PathPrefix(`/auth`))"
       - "traefik.http.middlewares.auth-strip.stripprefix.prefixes=/auth"
       - "traefik.http.routers.auth.middlewares=auth-strip"
       - "traefik.http.services.auth.loadbalancer.server.port=3000"

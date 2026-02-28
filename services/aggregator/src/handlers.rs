@@ -18,7 +18,7 @@ use crate::{
 
 pub async fn get_feed_items(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Path(feed_id): Path<Uuid>,
     Query(params): Query<GetItemsQuery>,
 ) -> Result<Json<Vec<ItemResponse>>, (StatusCode, Json<ErrorResponse>)> {
@@ -182,7 +182,7 @@ pub async fn get_feed_items(
 
 pub async fn get_all_items(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Query(params): Query<GetItemsQuery>,
 ) -> Result<Json<Vec<ItemResponse>>, (StatusCode, Json<ErrorResponse>)> {
     let limit = params.limit.unwrap_or(50).min(1000);
@@ -275,7 +275,7 @@ pub async fn get_all_items(
 
 pub async fn update_item_status(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Path(item_id): Path<Uuid>,
     Json(payload): Json<UpdateItemStatusRequest>,
 ) -> Result<Json<ReadStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -345,7 +345,7 @@ pub async fn update_item_status(
 
 pub async fn mark_feed_items_read(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Path(feed_id): Path<Uuid>,
     Json(payload): Json<MarkAllReadRequest>,
 ) -> Result<Json<MarkAllReadResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -412,7 +412,7 @@ pub async fn mark_feed_items_read(
 
 pub async fn mark_all_items_read(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Json(payload): Json<MarkAllReadRequest>,
 ) -> Result<Json<MarkAllReadResponse>, (StatusCode, Json<ErrorResponse>)> {
     let result = sqlx::query!(
@@ -449,7 +449,7 @@ pub async fn mark_all_items_read(
 
 pub async fn get_feed_unread_count(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Path(feed_id): Path<Uuid>,
 ) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<ErrorResponse>)> {
     let has_access = sqlx::query!(
@@ -512,7 +512,7 @@ pub async fn get_feed_unread_count(
 
 pub async fn get_all_unread_count(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
 ) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<ErrorResponse>)> {
     let count = sqlx::query!(
         r#"
@@ -545,7 +545,7 @@ pub async fn get_all_unread_count(
 
 pub async fn get_all_unread_counts(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
 ) -> Result<Json<AllUnreadCountsResponse>, (StatusCode, Json<ErrorResponse>)> {
     let feed_counts = sqlx::query!(
         r#"
@@ -591,7 +591,7 @@ pub async fn get_all_unread_counts(
 
 pub async fn get_clusters(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Query(params): Query<GetClustersQuery>,
 ) -> Result<Json<Vec<ClusterResponse>>, (StatusCode, Json<ErrorResponse>)> {
     let limit = params.limit.unwrap_or(50).min(100);
@@ -692,7 +692,7 @@ pub async fn get_clusters(
 
 pub async fn update_cluster_status(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Path(id): Path<Uuid>, // cluster_id or item_id
     Json(payload): Json<UpdateItemStatusRequest>,
 ) -> Result<Json<ClusterStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -737,7 +737,7 @@ pub async fn update_cluster_status(
 
 pub async fn get_cluster_unread_count(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
 ) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<ErrorResponse>)> {
     let count = sqlx::query!(
         r#"
@@ -770,7 +770,7 @@ pub async fn get_cluster_unread_count(
 
 pub async fn get_feed_clusters(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Path(feed_id): Path<Uuid>,
     Query(params): Query<GetClustersQuery>,
 ) -> Result<Json<Vec<ClusterResponse>>, (StatusCode, Json<ErrorResponse>)> {
@@ -899,7 +899,7 @@ pub async fn get_feed_clusters(
 
 pub async fn mark_feed_clusters_read(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Path(feed_id): Path<Uuid>,
     Json(payload): Json<MarkAllReadRequest>,
 ) -> Result<Json<MarkAllReadResponse>, (StatusCode, Json<ErrorResponse>)> {

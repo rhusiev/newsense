@@ -3,6 +3,8 @@ mod models;
 mod utils;
 mod handlers;
 mod router;
+mod extractors;
+mod admin;
 
 use axum::{
     http::{HeaderValue, Method, header},
@@ -34,6 +36,7 @@ async fn main() {
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             username VARCHAR(255) UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
+            role INTEGER DEFAULT 0,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         "#,
@@ -57,6 +60,19 @@ async fn main() {
     .execute(&pool)
     .await
     .expect("Failed to create remember_tokens table");
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS access_codes (
+            name VARCHAR(255) PRIMARY KEY,
+            password_hash TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("Failed to create access_codes table");
 
     let is_dev = cfg!(debug_assertions);
     let is_production = !is_dev;

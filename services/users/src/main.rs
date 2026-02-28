@@ -71,7 +71,10 @@ struct SearchParams {
     q: String,
 }
 
-struct AuthUser(Uuid);
+struct AuthUser {
+    id: Uuid,
+    role: i32,
+}
 
 impl<S> FromRequestParts<S> for AuthUser
 where
@@ -98,8 +101,13 @@ where
             )
         })?;
 
+        let role = session.get::<i32>("role").await.unwrap_or(Some(0));
+
         match user_id {
-            Some(id) => Ok(AuthUser(id)),
+            Some(id) => Ok(AuthUser {
+                id,
+                role: role.unwrap_or(0),
+            }),
             None => Err((
                 StatusCode::UNAUTHORIZED,
                 Json(ErrorResponse {
@@ -109,6 +117,8 @@ where
         }
     }
 }
+
+
 
 #[tokio::main]
 async fn main() {
@@ -211,7 +221,7 @@ async fn main() {
 
 async fn add_feed(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Json(payload): Json<AddFeedRequest>,
 ) -> Result<(StatusCode, Json<FeedResponse>), (StatusCode, Json<ErrorResponse>)> {
     let source = sqlx::query!(
@@ -306,7 +316,7 @@ async fn add_feed(
 
 async fn list_subscribed_feeds(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
 ) -> Result<Json<Vec<FeedResponse>>, (StatusCode, Json<ErrorResponse>)> {
     let feeds = sqlx::query_as!(
         FeedResponse,
@@ -336,7 +346,7 @@ async fn list_subscribed_feeds(
 
 async fn list_owned_feeds(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
 ) -> Result<Json<Vec<FeedResponse>>, (StatusCode, Json<ErrorResponse>)> {
     let feeds = sqlx::query_as!(
         FeedResponse,
@@ -365,7 +375,7 @@ async fn list_owned_feeds(
 
 async fn get_feed_subscriber_count(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Path(feed_id): Path<Uuid>,
 ) -> Result<Json<SubscriberCountResponse>, (StatusCode, Json<ErrorResponse>)> {
     let feed = sqlx::query!(
@@ -422,7 +432,7 @@ async fn get_feed_subscriber_count(
 
 async fn update_feed(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Path(feed_id): Path<Uuid>,
     Json(payload): Json<UpdateFeedRequest>,
 ) -> Result<Json<FeedResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -484,7 +494,7 @@ async fn update_feed(
 
 async fn get_feed(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Path(feed_id): Path<Uuid>,
 ) -> Result<Json<FeedResponse>, (StatusCode, Json<ErrorResponse>)> {
     let feed = sqlx::query_as!(
@@ -529,7 +539,7 @@ async fn get_feed(
 
 async fn delete_feed(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Path(feed_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     let feed = sqlx::query!("SELECT owner_id FROM feeds WHERE id = $1", feed_id)
@@ -588,7 +598,7 @@ async fn delete_feed(
 
 async fn subscribe_feed(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Path(feed_id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<FeedSubscriptionResponse>), (StatusCode, Json<ErrorResponse>)> {
     let feed = sqlx::query!(
@@ -653,7 +663,7 @@ async fn subscribe_feed(
 
 async fn unsubscribe_feed(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    AuthUser { id: user_id, .. }: AuthUser,
     Path(feed_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     let feed = sqlx::query!(
@@ -753,3 +763,4 @@ async fn search_public_feeds(
 
     Ok(Json(feeds))
 }
+

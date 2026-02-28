@@ -186,7 +186,7 @@ async fn worker_task(
 }
 
 async fn error_recovery_task(pool: PgPool) {
-    let recovery_interval_secs: u64 = 24 * 60 * 60;
+    let recovery_interval_secs: u64 = 24 * 60 * 60; // todo: into a constant/environment var
 
     info!("Error recovery task started. Runs daily.");
 

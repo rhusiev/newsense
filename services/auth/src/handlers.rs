@@ -84,6 +84,7 @@ pub async fn register(
             Json(AuthResponse {
                 user_id,
                 username: payload.username,
+                role: 0,
             }),
         )),
         Err(e)
@@ -113,8 +114,8 @@ pub async fn login(
     jar: CookieJar,
     Json(payload): Json<LoginRequest>,
 ) -> Result<(CookieJar, Json<AuthResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let user = sqlx::query_as::<_, (Uuid, String, String)>(
-        "SELECT id, username, password_hash FROM users WHERE username = $1",
+    let user = sqlx::query_as::<_, (Uuid, String, String, i32)>(
+        "SELECT id, username, password_hash, role FROM users WHERE username = $1",
     )
     .bind(&payload.username)
     .fetch_optional(&state.db)
@@ -128,7 +129,7 @@ pub async fn login(
         )
     })?;
 
-    let Some((user_id, username, password_hash)) = user else {
+    let Some((user_id, username, password_hash, role)) = user else {
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(ErrorResponse {
@@ -167,6 +168,15 @@ pub async fn login(
         )
     })?;
 
+    session.insert("role", role).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Session update failed".to_string(),
+            }),
+        )
+    })?;
+
     let mut response_jar = jar;
     if payload.remember_me {
         let series = Uuid::new_v4();
@@ -192,7 +202,7 @@ pub async fn login(
         response_jar = response_jar.add(cookie);
     }
 
-    Ok((response_jar, Json(AuthResponse { user_id, username })))
+    Ok((response_jar, Json(AuthResponse { user_id, username, role })))
 }
 
 pub async fn logout(
@@ -277,7 +287,7 @@ pub async fn current_user(
         }),
     ))?;
 
-    let user = sqlx::query_as::<_, (Uuid, String)>("SELECT id, username FROM users WHERE id = $1")
+    let user = sqlx::query_as::<_, (Uuid, String, i32)>("SELECT id, username, role FROM users WHERE id = $1")
         .bind(user_id)
         .fetch_optional(&state.db)
         .await
@@ -296,11 +306,15 @@ pub async fn current_user(
             }),
         ))?;
 
+    let role = user.2;
+    session.insert("role", role).await.ok();
+
     Ok((
         response_jar,
         Json(AuthResponse {
             user_id: user.0,
             username: user.1,
+            role,
         }),
     ))
 }
