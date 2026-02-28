@@ -135,17 +135,34 @@ async fn main() {
 
     let web_url = std::env::var("WEB_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
 
-    let allowed_origins = [
+    let mut allowed_origins = vec![
         web_url.parse::<HeaderValue>().unwrap(),
         "http://127.0.0.1:5173".parse::<HeaderValue>().unwrap(),
         "http://localhost:5173".parse::<HeaderValue>().unwrap(),
     ];
 
+    if let Ok(domain) = std::env::var("COOKIE_DOMAIN") {
+        if let Some(stripped) = domain.strip_prefix('.') {
+            let prod_origin = format!("https://{}", stripped);
+            if let Ok(val) = prod_origin.parse::<HeaderValue>() {
+                allowed_origins.push(val);
+            }
+        }
+    }
+
     let cors = CorsLayer::new()
         .allow_origin(allowed_origins)
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PATCH,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([
             header::CONTENT_TYPE,
+            header::AUTHORIZATION,
             header::HeaderName::from_static("x-csrf-token"),
         ])
         .allow_credentials(true);
