@@ -119,8 +119,8 @@ async fn main() {
     let csrf_config = CsrfConfig::default();
 
     let governor_config = GovernorConfigBuilder::default()
-        .per_second(20)
-        .burst_size(30)
+        .per_second(30)
+        .burst_size(40)
         .finish()
         .unwrap();
 
