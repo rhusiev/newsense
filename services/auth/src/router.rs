@@ -14,4 +14,5 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/codes", get(admin::list_codes))
         .route("/admin/codes/count", get(admin::count_codes))
         .route("/admin/codes/{name}", delete(admin::delete_code))
+        .route("/admin/codes/{name}", axum::routing::patch(admin::update_code))
 }

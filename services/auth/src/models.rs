@@ -25,16 +25,30 @@ pub struct AuthResponse {
 #[derive(Deserialize)]
 pub struct CreateCodesRequest {
     pub count: usize,
+    #[serde(default = "default_uses")]
+    pub uses: i32,
+}
+
+fn default_uses() -> i32 {
+    1
 }
 
 #[derive(Deserialize)]
 pub struct CreateCodeRequest {
     pub code: String,
+    #[serde(default = "default_uses")]
+    pub uses: i32,
 }
 
 #[derive(Serialize)]
 pub struct CodeResponse {
     pub code: String,
+    pub uses_left: i32,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateCodeRequest {
+    pub uses_left: i32,
 }
 
 

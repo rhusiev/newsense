@@ -65,6 +65,7 @@ async fn main() {
         r#"
         CREATE TABLE IF NOT EXISTS access_codes (
             code VARCHAR(255) PRIMARY KEY,
+            uses_left INT NOT NULL DEFAULT 1,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         "#,

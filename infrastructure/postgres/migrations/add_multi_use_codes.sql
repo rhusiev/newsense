@@ -1,0 +1,1 @@
+ALTER TABLE access_codes ADD COLUMN uses_left INT NOT NULL DEFAULT 1;

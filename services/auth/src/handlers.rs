@@ -380,27 +380,6 @@ pub async fn register_with_code(
         ));
     }
 
-    let code_exists = sqlx::query!("SELECT code FROM access_codes WHERE code = $1", code)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-        })?;
-
-    if code_exists.is_none() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: "Invalid access code".to_string(),
-            }),
-        ));
-    }
-
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
     let password_hash = argon2
@@ -426,21 +405,26 @@ pub async fn register_with_code(
         )
     })?;
 
-    let code_delete = sqlx::query!("DELETE FROM access_codes WHERE code = $1", code)
-        .execute(&mut *tx)
+    let code_update = sqlx::query!("UPDATE access_codes SET uses_left = uses_left - 1 WHERE code = $1 AND uses_left > 0 RETURNING uses_left", code)
+        .fetch_optional(&mut *tx)
         .await;
 
-    match code_delete {
-        Ok(result) => {
-            if result.rows_affected() == 0 {
-                let _ = tx.rollback().await;
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    Json(ErrorResponse {
-                        error: "Invalid or already used access code".to_string(),
-                    }),
-                ));
+    match code_update {
+        Ok(Some(r)) => {
+            if r.uses_left == 0 {
+                let _ = sqlx::query!("DELETE FROM access_codes WHERE code = $1", code)
+                    .execute(&mut *tx)
+                    .await;
             }
+        }
+        Ok(None) => {
+            let _ = tx.rollback().await;
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: "Invalid or already used access code".to_string(),
+                }),
+            ));
         }
         Err(e) => {
             let _ = tx.rollback().await;
