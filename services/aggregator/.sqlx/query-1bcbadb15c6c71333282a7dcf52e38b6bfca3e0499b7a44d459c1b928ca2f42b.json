@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT\n                    i.id as \"id!\",\n                    ARRAY[$2::uuid] as \"feed_ids!\",\n                    i.title, i.link, i.content, i.author,\n                    i.published_at, i.cluster_id, i.created_at,\n                    ir.is_read as \"is_read?\",\n                    ROUND(COALESCE(ir.liked, 0.0))::REAL as \"liked?\",\n                    ip.score as \"prediction_score?\"\n                FROM items i\n                INNER JOIN feeds f ON i.source_id = f.source_id\n                LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n                WHERE f.id = $2 AND (ir.is_read IS NULL OR ir.is_read = false)\n                ORDER BY i.published_at DESC\n                LIMIT $3\n                ",
+  "query": "\n                SELECT\n                    i.id as \"id!\",\n                    ARRAY[$2::uuid] as \"feed_ids!\",\n                    i.title, i.link, i.content, i.author,\n                    i.published_at, i.cluster_id, i.created_at,\n                    ir.is_read as \"is_read?\",\n                    ROUND(COALESCE(ir.liked, 0.0))::REAL as \"liked?\",\n                    ip.score as \"prediction_score?\"\n                FROM items i\n                INNER JOIN feeds f ON i.source_id = f.source_id\n                LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n                WHERE f.id = $2 AND (ir.is_read IS NULL OR ir.is_read = false)\n                  AND ($4::REAL IS NULL OR ip.score >= $4)\n                  AND ($5::REAL IS NULL OR ip.score <= $5)\n                ORDER BY i.published_at DESC\n                LIMIT $3\n                ",
   "describe": {
     "columns": [
       {
@@ -68,7 +68,9 @@
       "Left": [
         "Uuid",
         "Uuid",
-        "Int8"
+        "Int8",
+        "Float4",
+        "Float4"
       ]
     },
     "nullable": [
@@ -86,5 +88,5 @@
       false
     ]
   },
-  "hash": "1d8f52f158fa75bf681a75f85401823789cf82aec7c71f227faa97af23446608"
+  "hash": "1bcbadb15c6c71333282a7dcf52e38b6bfca3e0499b7a44d459c1b928ca2f42b"
 }

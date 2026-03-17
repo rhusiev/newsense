@@ -9,6 +9,8 @@ pub struct GetItemsQuery {
     #[serde(default, with = "time::serde::iso8601::option")]
     pub before: Option<time::OffsetDateTime>,
     pub unread_only: Option<bool>,
+    pub score_min: Option<f32>,
+    pub score_max: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -18,6 +20,14 @@ pub struct GetClustersQuery {
     pub before: Option<time::OffsetDateTime>,
     pub unread_only: Option<bool>,
     pub feed_id: Option<Uuid>,
+    pub score_min: Option<f32>,
+    pub score_max: Option<f32>,
+}
+
+#[derive(Deserialize)]
+pub struct GetUnreadCountsQuery {
+    pub score_min: Option<f32>,
+    pub score_max: Option<f32>,
 }
 
 #[derive(Deserialize)]

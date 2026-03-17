@@ -10,8 +10,9 @@ use crate::{
     auth::AuthUser,
     models::{
         AllUnreadCountsResponse, ClusterResponse, ClusterStatusResponse, ErrorResponse,
-        FeedUnreadCount, GetClustersQuery, GetItemsQuery, ItemResponse, MarkAllReadRequest,
-        MarkAllReadResponse, ReadStatusResponse, UnreadCountResponse, UpdateItemStatusRequest,
+        FeedUnreadCount, GetClustersQuery, GetItemsQuery, GetUnreadCountsQuery, ItemResponse,
+        MarkAllReadRequest, MarkAllReadResponse, ReadStatusResponse, UnreadCountResponse,
+        UpdateItemStatusRequest,
     },
     state::AppState,
 };
@@ -74,13 +75,17 @@ pub async fn get_feed_items(
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE f.id = $2 AND i.published_at > $3
+                  AND ($5::REAL IS NULL OR ip.score >= $5)
+                  AND ($6::REAL IS NULL OR ip.score <= $6)
                 ORDER BY i.published_at ASC
                 LIMIT $4
                 "#,
                 user_id,
                 feed_id,
                 since,
-                limit
+                limit,
+                params.score_min,
+                params.score_max
             )
             .fetch_all(&state.db)
             .await
@@ -102,13 +107,17 @@ pub async fn get_feed_items(
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE f.id = $2 AND i.published_at < $3
+                  AND ($5::REAL IS NULL OR ip.score >= $5)
+                  AND ($6::REAL IS NULL OR ip.score <= $6)
                 ORDER BY i.published_at DESC
                 LIMIT $4
                 "#,
                 user_id,
                 feed_id,
                 before,
-                limit
+                limit,
+                params.score_min,
+                params.score_max
             )
             .fetch_all(&state.db)
             .await
@@ -130,12 +139,16 @@ pub async fn get_feed_items(
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE f.id = $2 AND (ir.is_read IS NULL OR ir.is_read = false)
+                  AND ($4::REAL IS NULL OR ip.score >= $4)
+                  AND ($5::REAL IS NULL OR ip.score <= $5)
                 ORDER BY i.published_at DESC
                 LIMIT $3
                 "#,
                 user_id,
                 feed_id,
-                limit
+                limit,
+                params.score_min,
+                params.score_max
             )
             .fetch_all(&state.db)
             .await
@@ -157,12 +170,16 @@ pub async fn get_feed_items(
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE f.id = $2
+                  AND ($4::REAL IS NULL OR ip.score >= $4)
+                  AND ($5::REAL IS NULL OR ip.score <= $5)
                 ORDER BY i.published_at DESC
                 LIMIT $3
                 "#,
                 user_id,
                 feed_id,
-                limit
+                limit,
+                params.score_min,
+                params.score_max
             )
             .fetch_all(&state.db)
             .await
@@ -208,11 +225,13 @@ pub async fn get_all_items(
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE fs.user_id = $1 AND i.published_at < $2
+                  AND ($4::REAL IS NULL OR ip.score >= $4)
+                  AND ($5::REAL IS NULL OR ip.score <= $5)
                 GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
                 ORDER BY i.published_at DESC
                 LIMIT $3
                 "#,
-                user_id, before, limit
+                user_id, before, limit, params.score_min, params.score_max
             ).fetch_all(&state.db).await
         }
         (_, true) => {
@@ -234,11 +253,13 @@ pub async fn get_all_items(
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE fs.user_id = $1 AND (ir.is_read IS NULL OR ir.is_read = false)
+                  AND ($3::REAL IS NULL OR ip.score >= $3)
+                  AND ($4::REAL IS NULL OR ip.score <= $4)
                 GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
                 ORDER BY i.published_at DESC
                 LIMIT $2
                 "#,
-                user_id, limit
+                user_id, limit, params.score_min, params.score_max
             ).fetch_all(&state.db).await
         }
         _ => {
@@ -260,11 +281,13 @@ pub async fn get_all_items(
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE fs.user_id = $1
+                  AND ($3::REAL IS NULL OR ip.score >= $3)
+                  AND ($4::REAL IS NULL OR ip.score <= $4)
                 GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
                 ORDER BY i.published_at DESC
                 LIMIT $2
                 "#,
-                user_id, limit
+                user_id, limit, params.score_min, params.score_max
             ).fetch_all(&state.db).await
         }
     }
@@ -451,6 +474,7 @@ pub async fn get_feed_unread_count(
     State(state): State<AppState>,
     AuthUser { id: user_id, .. }: AuthUser,
     Path(feed_id): Path<Uuid>,
+    Query(params): Query<GetUnreadCountsQuery>,
 ) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<ErrorResponse>)> {
     let has_access = sqlx::query!(
         r#"
@@ -489,10 +513,15 @@ pub async fn get_feed_unread_count(
         FROM items i
         INNER JOIN feeds f ON i.source_id = f.source_id
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE f.id = $2 AND (ir.is_read IS NULL OR ir.is_read = false)
+          AND ($3::REAL IS NULL OR ip.score >= $3)
+          AND ($4::REAL IS NULL OR ip.score <= $4)
         "#,
         user_id,
-        feed_id
+        feed_id,
+        params.score_min,
+        params.score_max
     )
     .fetch_one(&state.db)
     .await
@@ -513,6 +542,7 @@ pub async fn get_feed_unread_count(
 pub async fn get_all_unread_count(
     State(state): State<AppState>,
     AuthUser { id: user_id, .. }: AuthUser,
+    Query(params): Query<GetUnreadCountsQuery>,
 ) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<ErrorResponse>)> {
     let count = sqlx::query!(
         r#"
@@ -522,10 +552,15 @@ pub async fn get_all_unread_count(
         INNER JOIN feeds f ON f.source_id = s.id
         LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE (f.owner_id = $1 OR fs.user_id = $1)
           AND (ir.is_read IS NULL OR ir.is_read = false)
+          AND ($2::REAL IS NULL OR ip.score >= $2)
+          AND ($3::REAL IS NULL OR ip.score <= $3)
         "#,
-        user_id
+        user_id,
+        params.score_min,
+        params.score_max
     )
     .fetch_one(&state.db)
     .await
@@ -546,21 +581,29 @@ pub async fn get_all_unread_count(
 pub async fn get_all_unread_counts(
     State(state): State<AppState>,
     AuthUser { id: user_id, .. }: AuthUser,
+    Query(params): Query<GetUnreadCountsQuery>,
 ) -> Result<Json<AllUnreadCountsResponse>, (StatusCode, Json<ErrorResponse>)> {
     let feed_counts = sqlx::query!(
         r#"
         SELECT
             f.id as feed_id,
-            COUNT(i.id) FILTER (WHERE ir.is_read IS NULL OR ir.is_read = false) as "unread_count!"
+            COUNT(i.id) FILTER (
+                WHERE (ir.is_read IS NULL OR ir.is_read = false)
+                  AND ($2::REAL IS NULL OR ip.score >= $2)
+                  AND ($3::REAL IS NULL OR ip.score <= $3)
+            ) as "unread_count!"
         FROM feeds f
         INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
         INNER JOIN sources s ON f.source_id = s.id
         LEFT JOIN items i ON s.id = i.source_id
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         GROUP BY f.id
         ORDER BY f.id
         "#,
-        user_id
+        user_id,
+        params.score_min,
+        params.score_max
     )
     .fetch_all(&state.db)
     .await
@@ -607,10 +650,13 @@ pub async fn get_clusters(
             INNER JOIN feeds f ON f.source_id = s.id
             INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id
             LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+            LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
             WHERE fs.user_id = $1
               AND ($2::uuid IS NULL OR f.id = $2)
               AND ($3::timestamptz IS NULL OR i.published_at < $3)
               AND ($4::boolean = false OR (ir.is_read IS NULL OR ir.is_read = false))
+              AND ($6::REAL IS NULL OR ip.score >= $6)
+              AND ($7::REAL IS NULL OR ip.score <= $7)
         ),
         anchor_entities AS (
             SELECT
@@ -636,6 +682,8 @@ pub async fn get_clusters(
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE
             COALESCE(i.cluster_id, i.id) IN (SELECT entity_id FROM anchor_entities)
+            AND ($6::REAL IS NULL OR ip.score >= $6)
+            AND ($7::REAL IS NULL OR ip.score <= $7)
         GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
         ORDER BY i.published_at DESC
         "#,
@@ -643,7 +691,9 @@ pub async fn get_clusters(
         params.feed_id,
         params.before,
         unread_only,
-        limit
+        limit,
+        params.score_min,
+        params.score_max
     )
     .fetch_all(&state.db)
     .await
@@ -738,6 +788,7 @@ pub async fn update_cluster_status(
 pub async fn get_cluster_unread_count(
     State(state): State<AppState>,
     AuthUser { id: user_id, .. }: AuthUser,
+    Query(params): Query<GetUnreadCountsQuery>,
 ) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<ErrorResponse>)> {
     let count = sqlx::query!(
         r#"
@@ -747,10 +798,15 @@ pub async fn get_cluster_unread_count(
         INNER JOIN feeds f ON f.source_id = s.id
         LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE (f.owner_id = $1 OR fs.user_id = $1)
           AND (ir.is_read IS NULL OR ir.is_read = false)
+          AND ($2::REAL IS NULL OR ip.score >= $2)
+          AND ($3::REAL IS NULL OR ip.score <= $3)
         "#,
-        user_id
+        user_id,
+        params.score_min,
+        params.score_max
     )
     .fetch_one(&state.db)
     .await
@@ -816,9 +872,12 @@ pub async fn get_feed_clusters(
             FROM items i
             INNER JOIN feeds f ON i.source_id = f.source_id
             LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+            LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
             WHERE f.id = $2
               AND ($3::timestamptz IS NULL OR i.published_at < $3)
               AND ($4::boolean = false OR (ir.is_read IS NULL OR ir.is_read = false))
+              AND ($6::REAL IS NULL OR ip.score >= $6)
+              AND ($7::REAL IS NULL OR ip.score <= $7)
         ),
         anchor_entities AS (
             SELECT
@@ -844,6 +903,8 @@ pub async fn get_feed_clusters(
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE
             COALESCE(i.cluster_id, i.id) IN (SELECT entity_id FROM anchor_entities)
+            AND ($6::REAL IS NULL OR ip.score >= $6)
+            AND ($7::REAL IS NULL OR ip.score <= $7)
         GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
         ORDER BY i.published_at DESC
         "#,
@@ -851,7 +912,9 @@ pub async fn get_feed_clusters(
         feed_id,
         params.before,
         unread_only,
-        limit
+        limit,
+        params.score_min,
+        params.score_max
     )
     .fetch_all(&state.db)
     .await

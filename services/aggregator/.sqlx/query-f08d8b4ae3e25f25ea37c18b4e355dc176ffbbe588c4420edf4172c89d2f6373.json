@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(DISTINCT i.id) as \"count!\"\n        FROM items i\n        INNER JOIN feeds f ON i.source_id = f.source_id\n        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n        WHERE f.id = $2 AND (ir.is_read IS NULL OR ir.is_read = false)\n          AND ($3::REAL IS NULL OR ip.score >= $3)\n          AND ($4::REAL IS NULL OR ip.score <= $4)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Float4",
+        "Float4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "f08d8b4ae3e25f25ea37c18b4e355dc176ffbbe588c4420edf4172c89d2f6373"
+}

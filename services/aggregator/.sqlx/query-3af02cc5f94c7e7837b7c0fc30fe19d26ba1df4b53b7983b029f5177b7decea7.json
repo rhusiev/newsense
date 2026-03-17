@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT\n                    i.id as \"id!\",\n                    ARRAY[$2::uuid] as \"feed_ids!\",\n                    i.title, i.link, i.content, i.author,\n                    i.published_at, i.cluster_id, i.created_at,\n                    ir.is_read as \"is_read?\",\n                    ROUND(COALESCE(ir.liked, 0.0))::REAL as \"liked?\",\n                    ip.score as \"prediction_score?\"\n                FROM items i\n                INNER JOIN feeds f ON i.source_id = f.source_id\n                LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n                WHERE f.id = $2 AND i.published_at > $3\n                ORDER BY i.published_at ASC\n                LIMIT $4\n                ",
+  "query": "\n                SELECT\n                    i.id as \"id!\",\n                    array_agg(f.id) as \"feed_ids!\",\n                    i.title, i.link, i.content, i.author,\n                    i.published_at, i.cluster_id, i.created_at,\n                    ir.is_read as \"is_read?\",\n                    ROUND(COALESCE(ir.liked, 0.0))::REAL as \"liked?\",\n                    ip.score as \"prediction_score?\"\n                FROM items i\n                INNER JOIN sources s ON i.source_id = s.id\n                INNER JOIN feeds f ON f.source_id = s.id\n                INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id\n                LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n                WHERE fs.user_id = $1 AND (ir.is_read IS NULL OR ir.is_read = false)\n                  AND ($3::REAL IS NULL OR ip.score >= $3)\n                  AND ($4::REAL IS NULL OR ip.score <= $4)\n                GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score\n                ORDER BY i.published_at DESC\n                LIMIT $2\n                ",
   "describe": {
     "columns": [
       {
@@ -67,9 +67,9 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Uuid",
-        "Timestamptz",
-        "Int8"
+        "Int8",
+        "Float4",
+        "Float4"
       ]
     },
     "nullable": [
@@ -87,5 +87,5 @@
       false
     ]
   },
-  "hash": "3334a60db12e6a7a2c1a4b7f222cec46bcd2cea274c2bd7f7ec6eee78f6fe37f"
+  "hash": "3af02cc5f94c7e7837b7c0fc30fe19d26ba1df4b53b7983b029f5177b7decea7"
 }

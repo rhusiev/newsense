@@ -90,8 +90,6 @@ async def training_worker():
 
     while not shutdown_event.is_set():
         try:
-            await asyncio.sleep(interval_seconds)
-
             async with db_pool.acquire() as conn:
                 users_to_train = await get_users_needing_training(conn)
 
@@ -104,6 +102,7 @@ async def training_worker():
                     await train_user_preference_model(
                         conn, row["user_id"], row["latest_activity"]
                     )
+            await asyncio.sleep(interval_seconds)
 
         except Exception as e:
             logger.error(f"Training worker error: {e}")
