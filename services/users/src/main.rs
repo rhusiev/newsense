@@ -350,8 +350,9 @@ async fn list_subscribed_feeds(
                COUNT(fs.user_id) as "subscriber_count!"
         FROM feeds f
         JOIN sources s ON f.source_id = s.id
-        LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id
         JOIN feed_subscriptions my_sub ON f.id = my_sub.feed_id AND my_sub.user_id = $1
+        LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id
+        WHERE f.is_public = true OR f.owner_id = $1
         GROUP BY f.id, s.url
         ORDER BY f.created_at DESC
         "#,
@@ -409,28 +410,23 @@ async fn update_feed(
     Path(feed_id): Path<Uuid>,
     Json(payload): Json<UpdateFeedRequest>,
 ) -> Result<Json<FeedResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let feed = sqlx::query!("SELECT owner_id FROM feeds WHERE id = $1", feed_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-        })?;
+    let feed = sqlx::query!(
+        "SELECT owner_id, is_public FROM feeds WHERE id = $1",
+        feed_id
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
 
-    match feed {
-        Some(f) if f.owner_id == Some(user_id) => {}
-        Some(_) => {
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(ErrorResponse {
-                    error: "Not owner".into(),
-                }),
-            ));
-        }
+    let feed_record = match feed {
+        Some(f) => f,
         None => {
             return Err((
                 StatusCode::NOT_FOUND,
@@ -440,6 +436,18 @@ async fn update_feed(
             ));
         }
     };
+
+    if feed_record.owner_id != Some(user_id) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "Not owner".into(),
+            }),
+        ));
+    }
+
+    let was_public = feed_record.is_public.unwrap_or(false);
+    let is_becoming_private = payload.is_public == Some(false) && was_public;
 
     sqlx::query!(
         r#"
@@ -465,6 +473,24 @@ async fn update_feed(
             }),
         )
     })?;
+
+    if is_becoming_private {
+        sqlx::query!(
+            "DELETE FROM feed_subscriptions WHERE feed_id = $1 AND user_id != $2",
+            feed_id,
+            user_id
+        )
+        .execute(&state.db)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+    }
 
     let updated_feed = fetch_feed_with_count(&state.db, feed_id)
         .await
@@ -520,7 +546,7 @@ async fn get_feed(
         return Err((
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
-                error: "Access denied".into(),
+                error: "Access denied: this feed is private".into(),
             }),
         ));
     }
@@ -544,6 +570,7 @@ async fn delete_feed(
                 }),
             )
         })?;
+
     let feed_record = match feed {
         Some(f) => f,
         None => {
@@ -555,6 +582,7 @@ async fn delete_feed(
             ));
         }
     };
+
     if feed_record.owner_id != Some(user_id) {
         return Err((
             StatusCode::FORBIDDEN,
@@ -563,6 +591,7 @@ async fn delete_feed(
             }),
         ));
     }
+
     let result = sqlx::query!("DELETE FROM feeds WHERE id = $1", feed_id)
         .execute(&state.db)
         .await
@@ -622,7 +651,7 @@ async fn subscribe_feed(
         return Err((
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
-                error: "Access denied".into(),
+                error: "Access denied: cannot subscribe to private feeds".into(),
             }),
         ));
     }
@@ -657,42 +686,6 @@ async fn unsubscribe_feed(
     AuthUser { id: user_id, .. }: AuthUser,
     Path(feed_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let feed = sqlx::query!(
-        "SELECT owner_id, is_public FROM feeds WHERE id = $1",
-        feed_id
-    )
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
-
-    let feed_record = match feed {
-        Some(f) => f,
-        None => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: "Feed not found".into(),
-                }),
-            ));
-        }
-    };
-
-    if feed_record.owner_id != Some(user_id) && feed_record.is_public != Some(true) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: "Access denied".into(),
-            }),
-        ));
-    }
-
     let result = sqlx::query!(
         "DELETE FROM feed_subscriptions WHERE user_id = $1 AND feed_id = $2",
         user_id,

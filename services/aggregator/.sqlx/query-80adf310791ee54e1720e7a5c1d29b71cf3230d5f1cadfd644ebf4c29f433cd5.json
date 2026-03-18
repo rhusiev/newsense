@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT\n                    i.id as \"id!\",\n                    ARRAY[$2::uuid] as \"feed_ids!\",\n                    i.title, i.link, i.content, i.author,\n                    i.published_at, i.cluster_id, i.created_at,\n                    ir.is_read as \"is_read?\",\n                    ROUND(COALESCE(ir.liked, 0.0))::REAL as \"liked?\",\n                    ip.score as \"prediction_score?\"\n                FROM items i\n                INNER JOIN feeds f ON i.source_id = f.source_id\n                LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n                WHERE f.id = $2 AND i.published_at > $3\n                  AND ($5::REAL IS NULL OR ip.score >= $5)\n                  AND ($6::REAL IS NULL OR ip.score <= $6)\n                ORDER BY i.published_at ASC\n                LIMIT $4\n                ",
+  "query": "\n                SELECT\n                    i.id as \"id!\",\n                    ARRAY[$2::uuid] as \"feed_ids!\",\n                    i.title, i.link, i.content, i.author,\n                    i.published_at, i.cluster_id, i.created_at,\n                    ir.is_read as \"is_read?\",\n                    ROUND(COALESCE(ir.liked, 0.0))::REAL as \"liked?\",\n                    ip.score as \"prediction_score?\"\n                FROM items i\n                INNER JOIN feeds f ON i.source_id = f.source_id\n                LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n                WHERE f.id = $2 AND (ir.is_read IS NULL OR ir.is_read = false)\n                  AND ($4::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $4)\n                  AND ($5::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $5)\n                ORDER BY i.published_at DESC\n                LIMIT $3\n                ",
   "describe": {
     "columns": [
       {
@@ -68,7 +68,6 @@
       "Left": [
         "Uuid",
         "Uuid",
-        "Timestamptz",
         "Int8",
         "Float4",
         "Float4"
@@ -89,5 +88,5 @@
       false
     ]
   },
-  "hash": "523c335175f9f908096e1e508029144d711e54462a17f044f800ca5ef9df8127"
+  "hash": "80adf310791ee54e1720e7a5c1d29b71cf3230d5f1cadfd644ebf4c29f433cd5"
 }

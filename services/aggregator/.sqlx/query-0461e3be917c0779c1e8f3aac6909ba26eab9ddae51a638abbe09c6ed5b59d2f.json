@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT\n                    i.id as \"id!\",\n                    array_agg(f.id) as \"feed_ids!\",\n                    i.title, i.link, i.content, i.author,\n                    i.published_at, i.cluster_id, i.created_at,\n                    ir.is_read as \"is_read?\",\n                    ROUND(COALESCE(ir.liked, 0.0))::REAL as \"liked?\",\n                    ip.score as \"prediction_score?\"\n                FROM items i\n                INNER JOIN sources s ON i.source_id = s.id\n                INNER JOIN feeds f ON f.source_id = s.id\n                INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id\n                LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n                WHERE fs.user_id = $1 AND i.published_at < $2\n                  AND ($4::REAL IS NULL OR ip.score >= $4)\n                  AND ($5::REAL IS NULL OR ip.score <= $5)\n                GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score\n                ORDER BY i.published_at DESC\n                LIMIT $3\n                ",
+  "query": "\n                SELECT\n                    i.id as \"id!\",\n                    ARRAY[$2::uuid] as \"feed_ids!\",\n                    i.title, i.link, i.content, i.author,\n                    i.published_at, i.cluster_id, i.created_at,\n                    ir.is_read as \"is_read?\",\n                    ROUND(COALESCE(ir.liked, 0.0))::REAL as \"liked?\",\n                    ip.score as \"prediction_score?\"\n                FROM items i\n                INNER JOIN feeds f ON i.source_id = f.source_id\n                LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n                WHERE f.id = $2 AND i.published_at < $3\n                  AND ($5::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $5)\n                  AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $6)\n                ORDER BY i.published_at DESC\n                LIMIT $4\n                ",
   "describe": {
     "columns": [
       {
@@ -67,6 +67,7 @@
     "parameters": {
       "Left": [
         "Uuid",
+        "Uuid",
         "Timestamptz",
         "Int8",
         "Float4",
@@ -88,5 +89,5 @@
       false
     ]
   },
-  "hash": "c7ce562f0a469684cd772b80b12a6ca198515c2c9d559568ed577ba636b52656"
+  "hash": "0461e3be917c0779c1e8f3aac6909ba26eab9ddae51a638abbe09c6ed5b59d2f"
 }

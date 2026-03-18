@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT EXISTS(\n            SELECT 1 FROM items i\n            INNER JOIN feeds f ON i.source_id = f.source_id\n            LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1\n            WHERE i.id = $2 AND (f.is_public OR f.owner_id = $1 OR fs.user_id = $1)\n        ) as \"has_access!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "has_access!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0acc903685e7e9a55f80c5236510cfb67ad0d9385cf48f6c3741153c568c79f4"
+}
