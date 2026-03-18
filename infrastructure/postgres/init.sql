@@ -128,6 +128,7 @@ CREATE INDEX idx_items_published ON items(published_at DESC);
 CREATE INDEX idx_items_source_id ON items(source_id);
 CREATE INDEX idx_feeds_source_id ON feeds(source_id);
 CREATE INDEX idx_feed_subscriptions_user_id ON feed_subscriptions(user_id);
+CREATE INDEX idx_feed_subscriptions_feed_id ON feed_subscriptions(feed_id);
 CREATE INDEX idx_items_cluster_id ON items(cluster_id) WHERE cluster_id IS NOT NULL;
 CREATE INDEX idx_clusters_last_updated ON clusters(last_updated_at);
 
