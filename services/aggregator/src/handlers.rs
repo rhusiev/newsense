@@ -28,7 +28,7 @@ pub async fn get_feed_items(
         SELECT EXISTS(
             SELECT 1 FROM feeds f
             LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
-            WHERE f.id = $2 AND (f.owner_id = $1 OR fs.user_id = $1)
+            WHERE f.id = $2 AND (f.is_public OR f.owner_id = $1 OR fs.user_id = $1)
         ) as "has_access!"
         "#,
         user_id,
@@ -47,9 +47,9 @@ pub async fn get_feed_items(
 
     if !has_access.has_access {
         return Err((
-            StatusCode::FORBIDDEN,
+            StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: "Access denied".into(),
+                error: "Feed not found".into(),
             }),
         ));
     }
@@ -75,8 +75,8 @@ pub async fn get_feed_items(
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE f.id = $2 AND i.published_at > $3
-                  AND ($5::REAL IS NULL OR ip.score >= $5)
-                  AND ($6::REAL IS NULL OR ip.score <= $6)
+                  AND ($5::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $5)
+                  AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $6)
                 ORDER BY i.published_at ASC
                 LIMIT $4
                 "#,
@@ -107,8 +107,8 @@ pub async fn get_feed_items(
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE f.id = $2 AND i.published_at < $3
-                  AND ($5::REAL IS NULL OR ip.score >= $5)
-                  AND ($6::REAL IS NULL OR ip.score <= $6)
+                  AND ($5::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $5)
+                  AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $6)
                 ORDER BY i.published_at DESC
                 LIMIT $4
                 "#,
@@ -139,8 +139,8 @@ pub async fn get_feed_items(
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE f.id = $2 AND (ir.is_read IS NULL OR ir.is_read = false)
-                  AND ($4::REAL IS NULL OR ip.score >= $4)
-                  AND ($5::REAL IS NULL OR ip.score <= $5)
+                  AND ($4::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $4)
+                  AND ($5::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $5)
                 ORDER BY i.published_at DESC
                 LIMIT $3
                 "#,
@@ -170,8 +170,8 @@ pub async fn get_feed_items(
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE f.id = $2
-                  AND ($4::REAL IS NULL OR ip.score >= $4)
-                  AND ($5::REAL IS NULL OR ip.score <= $5)
+                  AND ($4::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $4)
+                  AND ($5::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $5)
                 ORDER BY i.published_at DESC
                 LIMIT $3
                 "#,
@@ -225,8 +225,8 @@ pub async fn get_all_items(
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE fs.user_id = $1 AND i.published_at < $2
-                  AND ($4::REAL IS NULL OR ip.score >= $4)
-                  AND ($5::REAL IS NULL OR ip.score <= $5)
+                  AND ($4::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $4)
+                  AND ($5::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $5)
                 GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
                 ORDER BY i.published_at DESC
                 LIMIT $3
@@ -253,8 +253,8 @@ pub async fn get_all_items(
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE fs.user_id = $1 AND (ir.is_read IS NULL OR ir.is_read = false)
-                  AND ($3::REAL IS NULL OR ip.score >= $3)
-                  AND ($4::REAL IS NULL OR ip.score <= $4)
+                  AND ($3::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $3)
+                  AND ($4::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $4)
                 GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
                 ORDER BY i.published_at DESC
                 LIMIT $2
@@ -281,8 +281,8 @@ pub async fn get_all_items(
                 LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
                 LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
                 WHERE fs.user_id = $1
-                  AND ($3::REAL IS NULL OR ip.score >= $3)
-                  AND ($4::REAL IS NULL OR ip.score <= $4)
+                  AND ($3::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $3)
+                  AND ($4::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $4)
                 GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
                 ORDER BY i.published_at DESC
                 LIMIT $2
@@ -308,7 +308,7 @@ pub async fn update_item_status(
             SELECT 1 FROM items i
             INNER JOIN feeds f ON i.source_id = f.source_id
             LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
-            WHERE i.id = $2 AND (f.owner_id = $1 OR fs.user_id = $1)
+            WHERE i.id = $2 AND (f.is_public OR f.owner_id = $1 OR fs.user_id = $1)
         ) as "has_access!"
         "#,
         user_id,
@@ -327,9 +327,9 @@ pub async fn update_item_status(
 
     if !has_access.has_access {
         return Err((
-            StatusCode::FORBIDDEN,
+            StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: "Access denied".into(),
+                error: "Item not found".into(),
             }),
         ));
     }
@@ -377,7 +377,7 @@ pub async fn mark_feed_items_read(
         SELECT EXISTS(
             SELECT 1 FROM feeds f
             LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
-            WHERE f.id = $2 AND (f.owner_id = $1 OR fs.user_id = $1)
+            WHERE f.id = $2 AND (f.is_public OR f.owner_id = $1 OR fs.user_id = $1)
         ) as "has_access!"
         "#,
         user_id,
@@ -396,9 +396,9 @@ pub async fn mark_feed_items_read(
 
     if !has_access.has_access {
         return Err((
-            StatusCode::FORBIDDEN,
+            StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: "Access denied".into(),
+                error: "Feed not found".into(),
             }),
         ));
     }
@@ -481,7 +481,7 @@ pub async fn get_feed_unread_count(
         SELECT EXISTS(
             SELECT 1 FROM feeds f
             LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
-            WHERE f.id = $2 AND (f.owner_id = $1 OR fs.user_id = $1)
+            WHERE f.id = $2 AND (f.is_public OR f.owner_id = $1 OR fs.user_id = $1)
         ) as "has_access!"
         "#,
         user_id,
@@ -500,9 +500,9 @@ pub async fn get_feed_unread_count(
 
     if !has_access.has_access {
         return Err((
-            StatusCode::FORBIDDEN,
+            StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: "Access denied".into(),
+                error: "Feed not found".into(),
             }),
         ));
     }
@@ -515,8 +515,8 @@ pub async fn get_feed_unread_count(
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE f.id = $2 AND (ir.is_read IS NULL OR ir.is_read = false)
-          AND ($3::REAL IS NULL OR ip.score >= $3)
-          AND ($4::REAL IS NULL OR ip.score <= $4)
+          AND ($3::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $3)
+          AND ($4::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $4)
         "#,
         user_id,
         feed_id,
@@ -555,8 +555,8 @@ pub async fn get_all_unread_count(
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE (f.owner_id = $1 OR fs.user_id = $1)
           AND (ir.is_read IS NULL OR ir.is_read = false)
-          AND ($2::REAL IS NULL OR ip.score >= $2)
-          AND ($3::REAL IS NULL OR ip.score <= $3)
+          AND ($2::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $2)
+          AND ($3::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $3)
         "#,
         user_id,
         params.score_min,
@@ -589,8 +589,8 @@ pub async fn get_all_unread_counts(
             f.id as feed_id,
             COUNT(i.id) FILTER (
                 WHERE (ir.is_read IS NULL OR ir.is_read = false)
-                  AND ($2::REAL IS NULL OR ip.score >= $2)
-                  AND ($3::REAL IS NULL OR ip.score <= $3)
+                  AND ($2::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $2)
+                  AND ($3::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $3)
             ) as "unread_count!"
         FROM feeds f
         INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
@@ -655,8 +655,8 @@ pub async fn get_clusters(
               AND ($2::uuid IS NULL OR f.id = $2)
               AND ($3::timestamptz IS NULL OR i.published_at < $3)
               AND ($4::boolean = false OR (ir.is_read IS NULL OR ir.is_read = false))
-              AND ($6::REAL IS NULL OR ip.score >= $6)
-              AND ($7::REAL IS NULL OR ip.score <= $7)
+              AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $6)
+              AND ($7::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $7)
         ),
         anchor_entities AS (
             SELECT
@@ -682,8 +682,8 @@ pub async fn get_clusters(
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE
             COALESCE(i.cluster_id, i.id) IN (SELECT entity_id FROM anchor_entities)
-            AND ($6::REAL IS NULL OR ip.score >= $6)
-            AND ($7::REAL IS NULL OR ip.score <= $7)
+            AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $6)
+            AND ($7::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $7)
         GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
         ORDER BY i.published_at DESC
         "#,
@@ -801,8 +801,8 @@ pub async fn get_cluster_unread_count(
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE (f.owner_id = $1 OR fs.user_id = $1)
           AND (ir.is_read IS NULL OR ir.is_read = false)
-          AND ($2::REAL IS NULL OR ip.score >= $2)
-          AND ($3::REAL IS NULL OR ip.score <= $3)
+          AND ($2::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $2)
+          AND ($3::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $3)
         "#,
         user_id,
         params.score_min,
@@ -835,7 +835,7 @@ pub async fn get_feed_clusters(
         SELECT EXISTS(
             SELECT 1 FROM feeds f
             LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
-            WHERE f.id = $2 AND (f.owner_id = $1 OR fs.user_id = $1)
+            WHERE f.id = $2 AND (f.is_public OR f.owner_id = $1 OR fs.user_id = $1)
         ) as "has_access!"
         "#,
         user_id,
@@ -854,9 +854,9 @@ pub async fn get_feed_clusters(
 
     if !has_access.has_access {
         return Err((
-            StatusCode::FORBIDDEN,
+            StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: "Access denied".into(),
+                error: "Feed not found".into(),
             }),
         ));
     }
@@ -876,8 +876,8 @@ pub async fn get_feed_clusters(
             WHERE f.id = $2
               AND ($3::timestamptz IS NULL OR i.published_at < $3)
               AND ($4::boolean = false OR (ir.is_read IS NULL OR ir.is_read = false))
-              AND ($6::REAL IS NULL OR ip.score >= $6)
-              AND ($7::REAL IS NULL OR ip.score <= $7)
+              AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $6)
+              AND ($7::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $7)
         ),
         anchor_entities AS (
             SELECT
@@ -903,8 +903,8 @@ pub async fn get_feed_clusters(
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE
             COALESCE(i.cluster_id, i.id) IN (SELECT entity_id FROM anchor_entities)
-            AND ($6::REAL IS NULL OR ip.score >= $6)
-            AND ($7::REAL IS NULL OR ip.score <= $7)
+            AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $6)
+            AND ($7::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $7)
         GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
         ORDER BY i.published_at DESC
         "#,
@@ -971,7 +971,7 @@ pub async fn mark_feed_clusters_read(
         SELECT EXISTS(
             SELECT 1 FROM feeds f
             LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
-            WHERE f.id = $2 AND (f.owner_id = $1 OR fs.user_id = $1)
+            WHERE f.id = $2 AND (f.is_public OR f.owner_id = $1 OR fs.user_id = $1)
         ) as "has_access!"
         "#,
         user_id,
@@ -990,9 +990,9 @@ pub async fn mark_feed_clusters_read(
 
     if !has_access.has_access {
         return Err((
-            StatusCode::FORBIDDEN,
+            StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: "Access denied".into(),
+                error: "Feed not found".into(),
             }),
         ));
     }
