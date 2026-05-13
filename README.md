@@ -34,6 +34,10 @@ Features:<br/>
 
 <img width="800" alt="4" src="https://github.com/user-attachments/assets/8054e0e9-1408-416a-a1fb-8016cf723e53" />
 
+## UI
+
+For the web ui use https://github.com/rhusiev/newsense-web
+
 # Dev stuff
 
 ```sh
