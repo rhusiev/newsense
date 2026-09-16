@@ -591,7 +591,8 @@ pub async fn get_all_unread_counts(
                 WHERE (ir.is_read IS NULL OR ir.is_read = false)
                   AND ($2::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $2)
                   AND ($3::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $3)
-            ) as "unread_count!"
+            ) as "unread_count!",
+            COUNT(i.id) FILTER (WHERE ir.is_read) as "read_count!"
         FROM feeds f
         INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
         INNER JOIN sources s ON f.source_id = s.id
@@ -621,6 +622,7 @@ pub async fn get_all_unread_counts(
         .map(|row| FeedUnreadCount {
             feed_id: row.feed_id,
             unread_count: row.unread_count,
+            read_count: row.read_count,
         })
         .collect();
 

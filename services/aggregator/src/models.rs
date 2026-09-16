@@ -95,6 +95,7 @@ pub struct UnreadCountResponse {
 pub struct FeedUnreadCount {
     pub feed_id: Uuid,
     pub unread_count: i64,
+    pub read_count: i64,
 }
 
 #[derive(Serialize)]
