@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS items (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     source_id UUID REFERENCES sources(id) ON DELETE CASCADE,
 
+    guid TEXT,
     title TEXT NOT NULL,
     link TEXT NOT NULL,
     content TEXT,
@@ -64,7 +65,7 @@ CREATE TABLE IF NOT EXISTS items (
     embedding vector(384),
     CONSTRAINT fk_items_clusters FOREIGN KEY (cluster_id) REFERENCES clusters(id),
 
-    CONSTRAINT unique_item_per_source UNIQUE (source_id, link)
+    CONSTRAINT unique_item_per_source UNIQUE (source_id, guid)
 );
 
 CREATE TABLE IF NOT EXISTS item_reads (
@@ -126,6 +127,7 @@ CREATE INDEX idx_item_reads_user_id ON item_reads(user_id);
 CREATE INDEX idx_item_reads_item_id ON item_reads(item_id);
 CREATE INDEX idx_items_published ON items(published_at DESC);
 CREATE INDEX idx_items_source_id ON items(source_id);
+CREATE INDEX idx_items_source_link ON items(source_id, link);
 CREATE INDEX idx_feeds_source_id ON feeds(source_id);
 CREATE INDEX idx_feed_subscriptions_user_id ON feed_subscriptions(user_id);
 CREATE INDEX idx_feed_subscriptions_feed_id ON feed_subscriptions(feed_id);

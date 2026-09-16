@@ -66,6 +66,14 @@ DELETE FROM clusters;
 COMMIT;
 ```
 
+`init.sql` only runs on an empty volume, so an existing deployment needs the
+files in `infrastructure/postgres/migrations/` applied by hand:
+
+```sh
+docker exec -i newsense_db psql -U newsense_user -d newsense_db -v ON_ERROR_STOP=1 \
+    < infrastructure/postgres/migrations/add_item_guid.sql
+```
+
 TODO:
 - no volume mounts for prod
 - reorder

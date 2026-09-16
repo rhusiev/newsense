@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                WITH adopted AS (\n                    UPDATE items\n                    SET guid = $2\n                    WHERE source_id = $1 AND link = $3 AND guid IS NULL\n                    RETURNING id\n                )\n                INSERT INTO items (source_id, guid, link, title, content, author, published_at)\n                SELECT $1, $2, $3, $4, $5, $6, $7\n                WHERE NOT EXISTS (SELECT 1 FROM adopted)\n                ON CONFLICT (source_id, guid) DO NOTHING\n                RETURNING id AS \"id!\"\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Varchar",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "82b006a74b37d6ce3a29174f9af8b1654d316d3d5f432193f42294d1bc7e4960"
+}

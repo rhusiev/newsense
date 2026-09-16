@@ -262,10 +262,6 @@ async fn process_single_feed(
         let mut new_item_ids = Vec::new();
 
         for entry in feed.entries {
-            let title = entry
-                .title
-                .map(|t| t.content)
-                .unwrap_or_else(|| "Untitled".to_string());
             let link = entry
                 .links
                 .first()
@@ -275,6 +271,10 @@ async fn process_single_feed(
                 continue;
             }
 
+            let title = entry
+                .title
+                .map(|t| t.content)
+                .unwrap_or_else(|| "Untitled".to_string());
             let content = entry
                 .summary
                 .map(|t| t.content)
@@ -282,16 +282,26 @@ async fn process_single_feed(
             let author = entry.authors.first().map(|a| a.name.clone());
             let published_at = entry.published.or(entry.updated).unwrap_or_else(Utc::now);
 
+            // Items predating the guid column are adopted by link on first sight so
+            // the switch of dedup key does not re-insert the whole backlog.
             let result = sqlx::query!(
                 r#"
-                INSERT INTO items (source_id, title, link, content, author, published_at)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT (source_id, link) DO NOTHING
-                RETURNING id
+                WITH adopted AS (
+                    UPDATE items
+                    SET guid = $2
+                    WHERE source_id = $1 AND link = $3 AND guid IS NULL
+                    RETURNING id
+                )
+                INSERT INTO items (source_id, guid, link, title, content, author, published_at)
+                SELECT $1, $2, $3, $4, $5, $6, $7
+                WHERE NOT EXISTS (SELECT 1 FROM adopted)
+                ON CONFLICT (source_id, guid) DO NOTHING
+                RETURNING id AS "id!"
                 "#,
                 source_info.id,
-                title,
+                entry.id,
                 link,
+                title,
                 content,
                 author,
                 published_at,
