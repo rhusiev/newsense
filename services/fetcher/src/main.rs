@@ -248,7 +248,8 @@ async fn process_single_feed(
             .header("Accept", "*/*")
             .header("Connection", "close")
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
 
         let content_bytes = response.bytes().await?;
 
