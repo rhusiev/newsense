@@ -559,17 +559,29 @@ async fn delete_feed(
     AuthUser { id: user_id, .. }: AuthUser,
     Path(feed_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let feed = sqlx::query!("SELECT owner_id FROM feeds WHERE id = $1", feed_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-        })?;
+    let mut tx = state.db.begin().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    let feed = sqlx::query!(
+        "SELECT owner_id, source_id FROM feeds WHERE id = $1",
+        feed_id
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
 
     let feed_record = match feed {
         Some(f) => f,
@@ -593,7 +605,7 @@ async fn delete_feed(
     }
 
     let result = sqlx::query!("DELETE FROM feeds WHERE id = $1", feed_id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
         .map_err(|e| {
             (
@@ -612,6 +624,35 @@ async fn delete_feed(
             }),
         ));
     }
+
+    // A source nobody references any more would otherwise be fetched forever.
+    sqlx::query!(
+        r#"
+        DELETE FROM sources s
+        WHERE s.id = $1
+          AND NOT EXISTS (SELECT 1 FROM feeds f WHERE f.source_id = s.id)
+        "#,
+        feed_record.source_id
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    tx.commit().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
