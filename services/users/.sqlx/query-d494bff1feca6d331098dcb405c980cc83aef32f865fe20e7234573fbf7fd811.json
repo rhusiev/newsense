@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.created_at,\n               COUNT(fs.user_id) as \"subscriber_count!\"\n        FROM feeds f\n        JOIN sources s ON f.source_id = s.id\n        LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id\n        WHERE f.owner_id = $1\n        GROUP BY f.id, s.url\n        ORDER BY f.created_at DESC\n        ",
+  "query": "\n        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.full_text, f.created_at,\n               COUNT(fs.user_id) as \"subscriber_count!\"\n        FROM feeds f\n        JOIN sources s ON f.source_id = s.id\n        LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id\n        WHERE f.owner_id = $1\n        GROUP BY f.id, s.url\n        ORDER BY f.created_at DESC\n        ",
   "describe": {
     "columns": [
       {
@@ -35,11 +35,16 @@
       },
       {
         "ordinal": 6,
+        "name": "full_text",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "subscriber_count!",
         "type_info": "Int8"
       }
@@ -56,9 +61,10 @@
       true,
       true,
       true,
+      false,
       true,
       null
     ]
   },
-  "hash": "aba7700db577acd3812ad3b9f7a31edd21d762027d300d20cc082ff4a200ac46"
+  "hash": "d494bff1feca6d331098dcb405c980cc83aef32f865fe20e7234573fbf7fd811"
 }

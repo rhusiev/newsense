@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.created_at,\n               COUNT(fs.user_id) as \"subscriber_count!\"\n        FROM feeds f\n        JOIN sources s ON f.source_id = s.id\n        LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id\n        WHERE f.id = $1\n        GROUP BY f.id, s.url\n        ",
+  "query": "\n        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.full_text, f.created_at,\n               COUNT(fs.user_id) as \"subscriber_count!\"\n        FROM feeds f\n        JOIN sources s ON f.source_id = s.id\n        LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id\n        WHERE f.is_public = true\n          AND (f.title ILIKE $1 OR f.description ILIKE $1 OR s.url ILIKE $1)\n        GROUP BY f.id, s.url\n        ORDER BY COUNT(fs.user_id) DESC, f.created_at DESC\n        LIMIT 50\n        ",
   "describe": {
     "columns": [
       {
@@ -35,18 +35,23 @@
       },
       {
         "ordinal": 6,
+        "name": "full_text",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "subscriber_count!",
         "type_info": "Int8"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Text"
       ]
     },
     "nullable": [
@@ -56,9 +61,10 @@
       true,
       true,
       true,
+      false,
       true,
       null
     ]
   },
-  "hash": "89bbac510b24d6c63ead9c16389ca3fc57f96aba5f23a6065ae95e0e7c6bed16"
+  "hash": "51c50656e411ee20b8611e2eb8c48430d2df29f0382e4f0eafc48e0ae32f93e4"
 }

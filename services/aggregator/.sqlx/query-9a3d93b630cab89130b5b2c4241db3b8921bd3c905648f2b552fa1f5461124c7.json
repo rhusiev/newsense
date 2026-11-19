@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT t.html AS \"html!\", t.fetched_at\n        FROM item_full_texts t\n        INNER JOIN items i ON i.id = t.item_id\n        WHERE t.item_id = $2\n          AND t.html IS NOT NULL\n          AND EXISTS (\n              SELECT 1 FROM feeds f\n              WHERE f.source_id = i.source_id AND f.owner_id = $1 AND f.full_text\n          )\n          AND NOT EXISTS (\n              SELECT 1 FROM feeds f WHERE f.source_id = i.source_id AND f.is_public\n          )\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "html!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "fetched_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "9a3d93b630cab89130b5b2c4241db3b8921bd3c905648f2b552fa1f5461124c7"
+}

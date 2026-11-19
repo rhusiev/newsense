@@ -14,6 +14,8 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::sync::{Semaphore, mpsc};
 use uuid::Uuid;
 
+mod full_text;
+
 #[derive(Clone)]
 struct AppState {
     db: PgPool,
@@ -58,6 +60,14 @@ async fn main() {
         .build()
         .expect("Failed to create HTTP client");
 
+    // Redirects are followed by hand there, to check every hop's address.
+    let article_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent("Mozilla/5.0 (compatible; RSSReader/1.0)")
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("Failed to create HTTP client");
+
     let (tx, rx) = mpsc::channel::<Uuid>(1000);
 
     let app_state = AppState {
@@ -69,6 +79,8 @@ async fn main() {
     tokio::spawn(worker_task(pool.clone(), http_client, valkey_conn, rx));
 
     tokio::spawn(scheduler_task(pool.clone(), tx.clone()));
+
+    tokio::spawn(full_text::full_text_task(pool.clone(), article_client));
 
     info!("Error recovery task starting");
     tokio::spawn(error_recovery_task(pool.clone()));

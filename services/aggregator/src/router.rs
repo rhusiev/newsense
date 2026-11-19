@@ -3,6 +3,7 @@ use axum::{
     Router,
 };
 use crate::{
+    full_text::get_full_text,
     state::AppState,
     handlers::{
         get_all_items, get_all_unread_count, get_all_unread_counts, get_cluster_unread_count,
@@ -28,6 +29,7 @@ pub fn routes() -> Router<AppState> {
         .route("/items/unread-count", get(get_all_unread_count))
         .route("/items/unread-counts", get(get_all_unread_counts))
         .route("/items/{item_id}/status", put(update_item_status))
+        .route("/items/{item_id}/full-text", get(get_full_text))
         .route("/clusters/feed/{feed_id}", get(get_feed_clusters))
         .route(
             "/clusters/feed/{feed_id}/mark-read",

@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS feeds (
     title VARCHAR(255),
     description TEXT,
     is_public BOOLEAN DEFAULT false,
+    full_text BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -129,6 +130,14 @@ CREATE TABLE IF NOT EXISTS exposures (
     score REAL NOT NULL,
     shown_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS item_full_texts (
+    item_id UUID PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+    html TEXT,
+    text TEXT,
+    error TEXT,
+    fetched_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_item_predictions_user_id ON item_predictions(user_id);

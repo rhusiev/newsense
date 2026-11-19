@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.created_at,\n               COUNT(fs.user_id) as \"subscriber_count!\"\n        FROM feeds f\n        JOIN sources s ON f.source_id = s.id\n        JOIN feed_subscriptions my_sub ON f.id = my_sub.feed_id AND my_sub.user_id = $1\n        LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id\n        WHERE f.is_public = true OR f.owner_id = $1\n        GROUP BY f.id, s.url\n        ORDER BY f.created_at DESC\n        ",
+  "query": "\n        SELECT\n            f.id,\n            f.owner_id,\n            s.url,\n            f.title,\n            f.description,\n            f.is_public,\n            f.full_text,\n            f.created_at,\n            COUNT(fs.user_id) as \"subscriber_count!\"\n        FROM feeds f\n        JOIN sources s ON f.source_id = s.id\n        LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id\n        WHERE f.is_public = true\n        GROUP BY f.id, s.url\n        ORDER BY COUNT(fs.user_id) DESC, f.created_at DESC\n        LIMIT $1 OFFSET $2\n        ",
   "describe": {
     "columns": [
       {
@@ -35,18 +35,24 @@
       },
       {
         "ordinal": 6,
+        "name": "full_text",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "subscriber_count!",
         "type_info": "Int8"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [
@@ -56,9 +62,10 @@
       true,
       true,
       true,
+      false,
       true,
       null
     ]
   },
-  "hash": "64cdcabfdb7f4e2e3e6d3cae36e822e16baaf5d75af3b0b61bf40171dc28f07a"
+  "hash": "85ed5764a0b2b5b7f38d30ba5154ff398625086d5d839d961489c481bfaa5dda"
 }
