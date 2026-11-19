@@ -63,6 +63,7 @@ UPDATE items
 SET embedding = NULL, 
     cluster_id = NULL;
 DELETE FROM clusters;
+DELETE FROM threads;
 COMMIT;
 ```
 
