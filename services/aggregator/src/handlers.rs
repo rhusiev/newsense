@@ -646,7 +646,8 @@ pub async fn get_clusters(
     Query(params): Query<GetClustersQuery>,
 ) -> Result<Json<Vec<ClusterResponse>>, (StatusCode, Json<ErrorResponse>)> {
     if let Some(top_n) = params.top_n {
-        return ranking::top_clusters(&state, user_id, top_n, &params)
+        // `feed_id` here is unchecked, so the ranked list stays on subscribed feeds.
+        return ranking::top_clusters(&state, user_id, top_n, None, &params)
             .await
             .map(Json);
     }
@@ -835,6 +836,12 @@ pub async fn get_feed_clusters(
                 error: "Feed not found".into(),
             }),
         ));
+    }
+
+    if let Some(top_n) = params.top_n {
+        return ranking::top_clusters(&state, user_id, top_n, Some(feed_id), &params)
+            .await
+            .map(Json);
     }
 
     let limit = params.limit.unwrap_or(50).min(100);

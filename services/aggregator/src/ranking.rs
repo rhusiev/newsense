@@ -28,31 +28,6 @@ const MAX_LIMIT: i64 = 100;
 const LOOKBACK_DAYS: i32 = 31;
 const TOP_POLICY: &str = "top";
 
-/// How the N daily slots are split between the top ranks and exploration.
-#[derive(Debug, PartialEq)]
-pub struct Slots {
-    /// Clusters kept from the top of the ranking.
-    pub keep: i64,
-    /// Clusters picked from the N ranks just below the kept ones.
-    pub boundary: i64,
-    /// Clusters picked from everything below the boundary pool.
-    pub random: i64,
-}
-
-impl Slots {
-    /// Rounds the exploration share; half of it, rounded up, goes to the
-    /// boundary pool, which tells most about where the cut should be.
-    pub fn new(n: i64, explore: f32) -> Self {
-        let explored = (n as f32 * explore).round() as i64;
-        let boundary = (explored + 1) / 2;
-        Slots {
-            keep: n - explored,
-            boundary,
-            random: explored - boundary,
-        }
-    }
-}
-
 fn bad_request(error: String) -> ApiError {
     (StatusCode::BAD_REQUEST, Json(ErrorResponse { error }))
 }
@@ -76,10 +51,14 @@ struct Picked {
     score: f64,
 }
 
+/// Ranks the user's subscribed feeds together, or only `feed_id` when given.
+/// With `per_feed`, each feed keeps its own N (its `feed_subscriptions.top_n`,
+/// else `top_n`) before the lists merge; otherwise one N applies to the merged list.
 pub async fn top_clusters(
     state: &AppState,
     user_id: Uuid,
     top_n: i64,
+    feed_id: Option<Uuid>,
     params: &GetClustersQuery,
 ) -> Result<Vec<ClusterResponse>, ApiError> {
     if !(1..=MAX_TOP_N).contains(&top_n) {
@@ -98,8 +77,14 @@ pub async fn top_clusters(
         return Err(bad_request(format!("unknown time zone {tz}")));
     }
 
-    let slots = Slots::new(top_n, explore);
-    let picked = pick_entities(state, user_id, tz, &slots, top_n, params).await?;
+    let scope = Scope {
+        top_n,
+        explore,
+        tz,
+        feed_id,
+        per_feed: params.per_feed.unwrap_or(false),
+    };
+    let picked = pick_entities(state, user_id, &scope, params).await?;
     log_exposures(state, user_id, &picked).await?;
 
     let ids: Vec<Uuid> = picked.iter().map(|p| p.entity_id).collect();
@@ -122,14 +107,24 @@ async fn is_known_tz(state: &AppState, tz: &str) -> Result<bool, ApiError> {
     .map_err(internal)
 }
 
-/// Ranks each day's clusters by their best item score and picks the shown ones.
-/// A day counts only when the window covers all of it.
+struct Scope<'a> {
+    top_n: i64,
+    explore: f32,
+    tz: &'a str,
+    feed_id: Option<Uuid>,
+    per_feed: bool,
+}
+
+/// Ranks each day's clusters by their best item score, within each feed when
+/// `per_feed`, and picks the shown ones. Of N slots, round(N * explore) go to
+/// exploration: half of them, rounded up, to the N ranks just below the kept
+/// ones, the rest to everything lower. A day counts only when the window
+/// covers all of it. A cluster picked in several feeds is shown once, with its
+/// best pick logged.
 async fn pick_entities(
     state: &AppState,
     user_id: Uuid,
-    tz: &str,
-    slots: &Slots,
-    pool_width: i64,
+    scope: &Scope<'_>,
     params: &GetClustersQuery,
 ) -> Result<Vec<Picked>, ApiError> {
     sqlx::query_as!(
@@ -138,31 +133,45 @@ async fn pick_entities(
         WITH window_start AS (
             SELECT COALESCE($2::timestamptz, now()) - make_interval(days => $10) AS at
         ),
+        scoped_feeds AS (
+            SELECT f.id AS feed_id, f.source_id,
+                CASE WHEN $6::boolean THEN COALESCE(fs.top_n::bigint, $4::bigint) ELSE $4::bigint END AS n
+            FROM feeds f
+            LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $1
+            WHERE ($7::uuid IS NULL AND fs.user_id IS NOT NULL) OR f.id = $7
+        ),
         entities AS (
             SELECT
+                CASE WHEN $6::boolean THEN sf.feed_id END AS scope_id,
+                MAX(sf.n) AS n,
                 COALESCE(i.cluster_id, i.id) AS entity_id,
                 MAX(i.published_at) AS max_date,
                 MAX(COALESCE(ip.score, 0.0))::float8 AS score,
                 BOOL_AND(COALESCE(ir.is_read, false)) AS all_read
             FROM items i
-            INNER JOIN feeds f ON f.source_id = i.source_id
-            INNER JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $1
+            INNER JOIN scoped_feeds sf ON sf.source_id = i.source_id
             LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $1
             LEFT JOIN item_predictions ip ON ip.item_id = i.id AND ip.user_id = $1
             WHERE i.published_at >= (SELECT at FROM window_start)
-            GROUP BY 1
+            GROUP BY 1, 3
         ),
         ranked AS (
-            SELECT e.*, d.day,
-                ROW_NUMBER() OVER (PARTITION BY d.day ORDER BY e.score DESC, e.entity_id) AS rnk
+            SELECT e.*, d.day, sl.keep, sl.boundary, sl.explored - sl.boundary AS random,
+                ROW_NUMBER() OVER (
+                    PARTITION BY e.scope_id, d.day ORDER BY e.score DESC, e.entity_id
+                ) AS rnk
             FROM entities e
             CROSS JOIN LATERAL (SELECT (e.max_date AT TIME ZONE $3)::date AS day) d
+            CROSS JOIN LATERAL (SELECT ROUND(e.n * $5::float8)::bigint AS explored) x
+            CROSS JOIN LATERAL (
+                SELECT x.explored, e.n - x.explored AS keep, (x.explored + 1) / 2 AS boundary
+            ) sl
         ),
         pooled AS (
             SELECT r.*,
                 CASE
-                    WHEN rnk <= $4 THEN 'top'
-                    WHEN rnk <= $4 + $7 THEN 'boundary'
+                    WHEN rnk <= keep THEN 'top'
+                    WHEN rnk <= keep + n THEN 'boundary'
                     ELSE 'random'
                 END AS policy
             FROM ranked r
@@ -170,27 +179,34 @@ async fn pick_entities(
         picked AS (
             SELECT p.*,
                 ROW_NUMBER() OVER (
-                    PARTITION BY day, policy ORDER BY md5($1::text || entity_id::text)
+                    PARTITION BY scope_id, day, policy ORDER BY md5($1::text || entity_id::text)
                 ) AS pick,
-                COUNT(*) OVER (PARTITION BY day, policy) AS pool_size
+                COUNT(*) OVER (PARTITION BY scope_id, day, policy) AS pool_size
             FROM pooled p
+        ),
+        shown AS (
+            SELECT DISTINCT ON (entity_id)
+                entity_id, day, policy, rnk, score, max_date, all_read,
+                CASE policy
+                    WHEN 'top' THEN 1.0
+                    WHEN 'boundary' THEN LEAST(1.0, boundary::float8 / pool_size)
+                    ELSE LEAST(1.0, random::float8 / pool_size)
+                END::float8 AS propensity
+            FROM picked
+            WHERE policy = 'top'
+               OR (policy = 'boundary' AND pick <= boundary)
+               OR (policy = 'random' AND pick <= random)
+            ORDER BY entity_id, (policy = 'top') DESC, propensity DESC
         )
         SELECT
             entity_id AS "entity_id!",
             day AS "day!",
             policy AS "policy!",
-            CASE policy
-                WHEN 'top' THEN 1.0
-                WHEN 'boundary' THEN LEAST(1.0, $5::bigint::float8 / pool_size)
-                ELSE LEAST(1.0, $6::bigint::float8 / pool_size)
-            END::float8 AS "propensity!",
+            propensity AS "propensity!",
             rnk AS "rank!",
             score AS "score!"
-        FROM picked
-        WHERE (policy = 'top'
-               OR (policy = 'boundary' AND pick <= $5)
-               OR (policy = 'random' AND pick <= $6))
-          AND ($2::timestamptz IS NULL OR max_date < $2)
+        FROM shown
+        WHERE ($2::timestamptz IS NULL OR max_date < $2)
           AND day > ((SELECT at FROM window_start) AT TIME ZONE $3)::date
           AND ($8::boolean = false OR NOT all_read)
         ORDER BY max_date DESC
@@ -198,11 +214,11 @@ async fn pick_entities(
         "#,
         user_id,
         params.before,
-        tz,
-        slots.keep,
-        slots.boundary,
-        slots.random,
-        pool_width,
+        scope.tz,
+        scope.top_n,
+        scope.explore as f64,
+        scope.per_feed,
+        scope.feed_id,
         params.unread_only.unwrap_or(false),
         params.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT),
         LOOKBACK_DAYS
@@ -270,23 +286,4 @@ async fn fetch_items(
     .fetch_all(&state.db)
     .await
     .map_err(internal)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Slots;
-
-    #[test]
-    fn slots_split_exploration_between_boundary_and_random() {
-        let s = |keep, boundary, random| Slots {
-            keep,
-            boundary,
-            random,
-        };
-        assert_eq!(Slots::new(20, 0.1), s(18, 1, 1));
-        assert_eq!(Slots::new(15, 0.1), s(13, 1, 1));
-        assert_eq!(Slots::new(30, 0.1), s(27, 2, 1));
-        assert_eq!(Slots::new(10, 0.0), s(10, 0, 0));
-        assert_eq!(Slots::new(1, 0.1), s(1, 0, 0));
-    }
 }

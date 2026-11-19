@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT feed_id AS \"feed_id!\", top_n AS \"top_n!\"\n           FROM feed_subscriptions WHERE user_id = $1 AND top_n IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "feed_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "top_n!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "f75696912cb71ed0efdc9618a8b0342dddeb51c881ee6eb7f1f44b346133f355"
+}

@@ -12,6 +12,8 @@ use tower_sessions::{Expiry, Session, SessionManagerLayer, cookie::time::Duratio
 use tower_sessions_sqlx_store::PostgresStore;
 use uuid::Uuid;
 
+mod settings;
+
 const SESSION_COOKIE_NAME: &str = "newsense_session";
 
 #[derive(Clone)]
@@ -218,6 +220,11 @@ async fn main() {
         .route("/feeds/{id}", delete(delete_feed))
         .route("/feeds/{id}/subscription", post(subscribe_feed))
         .route("/feeds/{id}/subscription", delete(unsubscribe_feed))
+        .route("/feeds/{id}/top-n", put(settings::set_feed_top_n))
+        .route(
+            "/settings",
+            get(settings::get_settings).put(settings::update_settings),
+        )
         .layer(session_layer)
         .layer(cors)
         .with_state(app_state);
