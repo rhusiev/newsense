@@ -2,6 +2,7 @@ mod state;
 mod auth;
 mod handlers;
 mod models;
+mod ranking;
 mod router;
 mod utils;
 

@@ -119,6 +119,18 @@ CREATE TABLE IF NOT EXISTS item_predictions (
     PRIMARY KEY (user_id, item_id)
 );
 
+CREATE TABLE IF NOT EXISTS exposures (
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    entity_id UUID NOT NULL,
+    day DATE NOT NULL,
+    policy TEXT NOT NULL CHECK (policy IN ('top', 'boundary', 'random')),
+    propensity REAL NOT NULL CHECK (propensity > 0 AND propensity <= 1),
+    rank INTEGER NOT NULL,
+    score REAL NOT NULL,
+    shown_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, entity_id)
+);
+
 CREATE INDEX idx_item_predictions_user_id ON item_predictions(user_id);
 CREATE INDEX idx_item_predictions_item_id ON item_predictions(item_id);
 CREATE INDEX idx_item_predictions_score ON item_predictions(score);

@@ -14,6 +14,7 @@ use crate::{
         MarkAllReadRequest, MarkAllReadResponse, ReadStatusResponse, UnreadCountResponse,
         UpdateItemStatusRequest,
     },
+    ranking,
     state::AppState,
 };
 
@@ -644,6 +645,11 @@ pub async fn get_clusters(
     AuthUser { id: user_id, .. }: AuthUser,
     Query(params): Query<GetClustersQuery>,
 ) -> Result<Json<Vec<ClusterResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    if let Some(top_n) = params.top_n {
+        return ranking::top_clusters(&state, user_id, top_n, &params)
+            .await
+            .map(Json);
+    }
     let limit = params.limit.unwrap_or(50).min(100);
     let unread_only = params.unread_only.unwrap_or(false);
 
@@ -706,45 +712,7 @@ pub async fn get_clusters(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
-    let mut cluster_map: HashMap<Uuid, Vec<ItemResponse>> = HashMap::new();
-    let mut singletons: Vec<ItemResponse> = Vec::new();
-
-    for item in rows {
-        if let Some(cid) = item.cluster_id {
-            cluster_map.entry(cid).or_default().push(item);
-        } else {
-            singletons.push(item);
-        }
-    }
-
-    let mut result: Vec<ClusterResponse> = Vec::new();
-
-    for (cid, items) in cluster_map {
-        let mut sorted_items = items;
-        sorted_items.sort_by(|a, b| b.published_at.cmp(&a.published_at));
-
-        let max_date = sorted_items.first().and_then(|i| i.published_at);
-
-        result.push(ClusterResponse {
-            id: cid,
-            is_cluster: true,
-            sort_date: max_date,
-            items: sorted_items,
-        });
-    }
-
-    for item in singletons {
-        result.push(ClusterResponse {
-            id: item.id,
-            is_cluster: false,
-            sort_date: item.published_at,
-            items: vec![item],
-        });
-    }
-
-    result.sort_by(|a, b| b.sort_date.cmp(&a.sort_date));
-
-    Ok(Json(result))
+    Ok(Json(group_clusters(rows)))
 }
 
 pub async fn update_cluster_status(
@@ -928,44 +896,7 @@ pub async fn get_feed_clusters(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
-    let mut cluster_map: HashMap<Uuid, Vec<ItemResponse>> = HashMap::new();
-    let mut singletons: Vec<ItemResponse> = Vec::new();
-
-    for item in rows {
-        if let Some(cid) = item.cluster_id {
-            cluster_map.entry(cid).or_default().push(item);
-        } else {
-            singletons.push(item);
-        }
-    }
-
-    let mut result: Vec<ClusterResponse> = Vec::new();
-
-    for (cid, items) in cluster_map {
-        let mut sorted_items = items;
-        sorted_items.sort_by(|a, b| b.published_at.cmp(&a.published_at));
-        let max_date = sorted_items.first().and_then(|i| i.published_at);
-
-        result.push(ClusterResponse {
-            id: cid,
-            is_cluster: true,
-            sort_date: max_date,
-            items: sorted_items,
-        });
-    }
-
-    for item in singletons {
-        result.push(ClusterResponse {
-            id: item.id,
-            is_cluster: false,
-            sort_date: item.published_at,
-            items: vec![item],
-        });
-    }
-
-    result.sort_by(|a, b| b.sort_date.cmp(&a.sort_date));
-
-    Ok(Json(result))
+    Ok(Json(group_clusters(rows)))
 }
 
 pub async fn mark_feed_clusters_read(
@@ -1043,4 +974,37 @@ pub async fn mark_feed_clusters_read(
     Ok(Json(MarkAllReadResponse {
         marked_count: result.rows_affected() as i64,
     }))
+}
+
+/// Groups item rows into cluster cards, newest first. Singletons become one-item cards.
+pub fn group_clusters(rows: Vec<ItemResponse>) -> Vec<ClusterResponse> {
+    let mut cluster_map: HashMap<Uuid, Vec<ItemResponse>> = HashMap::new();
+    let mut result: Vec<ClusterResponse> = Vec::new();
+
+    for item in rows {
+        match item.cluster_id {
+            Some(cid) => cluster_map.entry(cid).or_default().push(item),
+            None => result.push(ClusterResponse {
+                id: item.id,
+                is_cluster: false,
+                sort_date: item.published_at,
+                explored: false,
+                items: vec![item],
+            }),
+        }
+    }
+
+    for (cid, mut items) in cluster_map {
+        items.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+        result.push(ClusterResponse {
+            id: cid,
+            is_cluster: true,
+            sort_date: items.first().and_then(|i| i.published_at),
+            explored: false,
+            items,
+        });
+    }
+
+    result.sort_by(|a, b| b.sort_date.cmp(&a.sort_date));
+    result
 }

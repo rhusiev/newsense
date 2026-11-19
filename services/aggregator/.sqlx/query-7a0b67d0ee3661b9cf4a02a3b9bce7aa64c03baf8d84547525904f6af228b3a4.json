@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO exposures (user_id, entity_id, day, policy, propensity, rank, score)\n        SELECT $1, * FROM UNNEST($2::uuid[], $3::date[], $4::text[], $5::real[], $6::int[], $7::real[])\n        ON CONFLICT (user_id, entity_id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "DateArray",
+        "TextArray",
+        "Float4Array",
+        "Int4Array",
+        "Float4Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7a0b67d0ee3661b9cf4a02a3b9bce7aa64c03baf8d84547525904f6af228b3a4"
+}

@@ -22,6 +22,12 @@ pub struct GetClustersQuery {
     pub feed_id: Option<Uuid>,
     pub score_min: Option<f32>,
     pub score_max: Option<f32>,
+    /// Keep the N best-scored clusters of each day instead of a score threshold.
+    pub top_n: Option<i64>,
+    /// Share of the N daily slots given to clusters below the cut (exploration).
+    pub explore: Option<f32>,
+    /// IANA time zone that decides where a day starts, such as `Europe/Kyiv`.
+    pub tz: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +85,8 @@ pub struct ClusterResponse {
     pub is_cluster: bool,
     #[serde(with = "time::serde::iso8601::option")]
     pub sort_date: Option<time::OffsetDateTime>,
+    /// Shown from below the top-N cut to learn about clusters the model ranks low.
+    pub explored: bool,
     pub items: Vec<ItemResponse>,
 }
 
