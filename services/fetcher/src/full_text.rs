@@ -20,6 +20,8 @@ const PER_HOST_GAP: Duration = Duration::from_secs(5);
 const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 5;
 const MAX_ERROR_CHARS: usize = 500;
+/// Where an image's address waits until the user asks for the image.
+const DEFERRED_SRC: &str = "data-src";
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -202,19 +204,34 @@ fn is_public(ip: IpAddr) -> bool {
     }
 }
 
-/// Keeps the readable part of the page. Images are dropped, so opening the
-/// reader view sends no request to the publisher.
+/// Keeps the readable part of the page. Image addresses move from `src` to
+/// `data-src`, so the reader view loads an image from the publisher only when
+/// the user taps it.
 fn extract(html: &str, url: &str) -> Result<Extracted, BoxError> {
     let article = Readability::new(html, Some(url), None)?.parse()?;
     let clean = ammonia::Builder::default()
-        .rm_tags(&["img", "picture", "source"])
+        .rm_tags(&["picture", "source"])
         .url_relative(ammonia::UrlRelative::Deny)
         .clean(&article.content)
         .to_string();
     Ok(Extracted {
-        html: clean,
+        html: defer_images(&clean),
         text: article.text_content.to_string(),
     })
+}
+
+fn defer_images(html: &str) -> String {
+    let doc = dom_query::Document::from(html);
+    for img in doc.select("img").iter() {
+        match img.attr("src") {
+            Some(src) => {
+                img.set_attr(DEFERRED_SRC, &src);
+                img.remove_attr("src");
+            }
+            None => img.remove(),
+        }
+    }
+    doc.select("body").inner_html().to_string()
 }
 
 #[cfg(test)]
@@ -242,14 +259,21 @@ mod tests {
     }
 
     #[test]
-    fn extraction_keeps_text_and_drops_scripts_and_images() {
+    fn extraction_keeps_text_drops_scripts_and_defers_images() {
         let page = format!(
-            "<html><head><title>T</title></head><body><nav>menu</nav><article><h1>T</h1>{}<img src='https://x.example/a.png'><script>alert(1)</script></article></body></html>",
+            "<html><head><title>T</title></head><body><nav>menu</nav><article><h1>T</h1>{}<img src='https://x.example/a.png' alt='map' onerror='alert(2)'><img src='/relative.png'><img alt='no address'><script>alert(1)</script></article></body></html>",
             "<p>Body text of the article that is long enough to count as content. </p>".repeat(20)
         );
         let e = extract(&page, "https://example.org/a").unwrap();
         assert!(e.text.contains("Body text of the article"));
         assert!(!e.html.contains("<script"));
-        assert!(!e.html.contains("<img"));
+        assert!(!e.html.contains("onerror"));
+        assert!(!e.html.contains(" src="));
+        assert!(e.html.contains(r#"data-src="https://x.example/a.png""#));
+        assert!(
+            e.html
+                .contains(r#"data-src="https://example.org/relative.png""#)
+        );
+        assert_eq!(e.html.matches("<img").count(), 2);
     }
 }
