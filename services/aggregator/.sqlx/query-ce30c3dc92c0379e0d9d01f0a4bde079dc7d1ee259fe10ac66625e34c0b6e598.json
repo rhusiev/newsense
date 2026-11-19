@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT\n                    i.id as \"id!\",\n                    ARRAY[$2::uuid] as \"feed_ids!\",\n                    i.title, i.link, i.content, i.author,\n                    i.published_at, i.cluster_id, i.created_at,\n                    ir.is_read as \"is_read?\",\n                    ROUND(COALESCE(ir.liked, 0.0))::REAL as \"liked?\",\n                    ip.score as \"prediction_score?\"\n                FROM items i\n                INNER JOIN feeds f ON i.source_id = f.source_id\n                LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n                WHERE f.id = $2\n                  AND ($4::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $4)\n                  AND ($5::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $5)\n                ORDER BY i.published_at DESC\n                LIMIT $3\n                ",
+  "query": "\n                SELECT\n                    i.id as \"id!\",\n                    ARRAY[$2::uuid] as \"feed_ids!\",\n                    i.title, i.link, i.content, i.author,\n                    i.published_at, i.cluster_id, i.created_at,\n                    ir.is_read as \"is_read?\",\n                    ROUND(ir.liked)::REAL as \"liked?\",\n                    ip.score as \"prediction_score?\"\n                FROM items i\n                INNER JOIN feeds f ON i.source_id = f.source_id\n                LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n                LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n                WHERE f.id = $2 AND (ir.is_read IS NULL OR ir.is_read = false)\n                  AND ($4::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $4)\n                  AND ($5::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $5)\n                ORDER BY i.published_at DESC\n                LIMIT $3\n                ",
   "describe": {
     "columns": [
       {
@@ -88,5 +88,5 @@
       false
     ]
   },
-  "hash": "1b2d2bc103852b81221276d7da66f9f41f5734318e7d5eb7f84d66530483fc4e"
+  "hash": "ce30c3dc92c0379e0d9d01f0a4bde079dc7d1ee259fe10ac66625e34c0b6e598"
 }

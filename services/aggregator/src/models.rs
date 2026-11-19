@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
 #[derive(Deserialize)]
@@ -33,13 +33,26 @@ pub struct GetUnreadCountsQuery {
 #[derive(Deserialize)]
 pub struct UpdateItemStatusRequest {
     pub is_read: Option<bool>,
-    pub liked: Option<f32>,
+    /// Absent leaves the label alone; `null` clears it to unrated.
+    #[serde(default, deserialize_with = "present")]
+    pub liked: Option<Option<f32>>,
+}
+
+/// Tells a field sent as `null` (`Some(None)`) apart from a missing one (`None`).
+fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::deserialize(deserializer).map(Some)
 }
 
 #[derive(Deserialize)]
 pub struct MarkAllReadRequest {
     #[serde(with = "time::serde::iso8601")]
     pub since: time::OffsetDateTime,
+    #[serde(default, with = "time::serde::iso8601::option")]
+    pub before: Option<time::OffsetDateTime>,
 }
 
 #[derive(Serialize)]
@@ -74,7 +87,7 @@ pub struct ReadStatusResponse {
     pub user_id: Uuid,
     pub item_id: Uuid,
     pub is_read: bool,
-    pub liked: f32,
+    pub liked: Option<f32>,
     #[serde(with = "time::serde::iso8601::option")]
     pub marked_at: Option<time::OffsetDateTime>,
 }
@@ -83,7 +96,7 @@ pub struct ReadStatusResponse {
 pub struct ClusterStatusResponse {
     pub updated_items: i64,
     pub is_read: bool,
-    pub liked: f32,
+    pub liked: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -112,4 +125,23 @@ pub struct MarkAllReadResponse {
 #[derive(Serialize)]
 pub struct ErrorResponse {
     pub error: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UpdateItemStatusRequest;
+
+    fn liked(body: &str) -> Option<Option<f32>> {
+        serde_json::from_str::<UpdateItemStatusRequest>(body)
+            .unwrap()
+            .liked
+    }
+
+    #[test]
+    fn liked_absent_null_and_value_stay_distinct() {
+        assert_eq!(liked(r#"{"is_read":true}"#), None);
+        assert_eq!(liked(r#"{"liked":null}"#), Some(None));
+        assert_eq!(liked(r#"{"liked":0}"#), Some(Some(0.0)));
+        assert_eq!(liked(r#"{"liked":-1}"#), Some(Some(-1.0)));
+    }
 }

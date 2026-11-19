@@ -68,7 +68,7 @@ pub async fn get_feed_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ROUND(ir.liked)::REAL as "liked?",
                     ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN feeds f ON i.source_id = f.source_id
@@ -100,7 +100,7 @@ pub async fn get_feed_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ROUND(ir.liked)::REAL as "liked?",
                     ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN feeds f ON i.source_id = f.source_id
@@ -132,7 +132,7 @@ pub async fn get_feed_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ROUND(ir.liked)::REAL as "liked?",
                     ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN feeds f ON i.source_id = f.source_id
@@ -163,7 +163,7 @@ pub async fn get_feed_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ROUND(ir.liked)::REAL as "liked?",
                     ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN feeds f ON i.source_id = f.source_id
@@ -216,7 +216,7 @@ pub async fn get_all_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ROUND(ir.liked)::REAL as "liked?",
                     ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN sources s ON i.source_id = s.id
@@ -244,7 +244,7 @@ pub async fn get_all_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ROUND(ir.liked)::REAL as "liked?",
                     ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN sources s ON i.source_id = s.id
@@ -272,7 +272,7 @@ pub async fn get_all_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ROUND(ir.liked)::REAL as "liked?",
                     ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN sources s ON i.source_id = s.id
@@ -338,19 +338,20 @@ pub async fn update_item_status(
         ReadStatusResponse,
         r#"
         INSERT INTO item_reads (user_id, item_id, is_read, liked)
-        VALUES ($1, $2, COALESCE($3::BOOLEAN, true), COALESCE($4::REAL, 0.0))
+        VALUES ($1, $2, COALESCE($3::BOOLEAN, true), $4::REAL)
         ON CONFLICT (user_id, item_id)
         DO UPDATE SET
             is_read = COALESCE($3::BOOLEAN, item_reads.is_read),
-            liked = COALESCE($4::REAL, item_reads.liked),
+            liked = CASE WHEN $5::BOOLEAN THEN $4::REAL ELSE item_reads.liked END,
             marked_at = CURRENT_TIMESTAMP
         RETURNING
-            user_id, item_id, is_read, ROUND(liked)::REAL as "liked!", marked_at
+            user_id, item_id, is_read, ROUND(liked)::REAL as "liked?", marked_at
         "#,
         user_id,
         item_id,
         payload.is_read,
-        payload.liked
+        payload.liked.flatten(),
+        payload.liked.is_some()
     )
     .fetch_one(&state.db)
     .await
@@ -406,16 +407,18 @@ pub async fn mark_feed_items_read(
     let result = sqlx::query!(
         r#"
         INSERT INTO item_reads (user_id, item_id, is_read, liked, marked_at)
-        SELECT $1, i.id, true, 0.0, CURRENT_TIMESTAMP
+        SELECT $1, i.id, true, NULL::REAL, CURRENT_TIMESTAMP
         FROM items i
         INNER JOIN feeds f ON i.source_id = f.source_id
         WHERE f.id = $2 AND i.published_at >= $3
+          AND ($4::TIMESTAMPTZ IS NULL OR i.published_at < $4)
         ON CONFLICT (user_id, item_id)
         DO UPDATE SET is_read = true, marked_at = CURRENT_TIMESTAMP
         "#,
         user_id,
         feed_id,
-        payload.since
+        payload.since,
+        payload.before
     )
     .execute(&state.db)
     .await
@@ -441,18 +444,20 @@ pub async fn mark_all_items_read(
     let result = sqlx::query!(
         r#"
         INSERT INTO item_reads (user_id, item_id, is_read, liked, marked_at)
-        SELECT DISTINCT $1::UUID, i.id, true, 0.0, CURRENT_TIMESTAMP
+        SELECT DISTINCT $1::UUID, i.id, true, NULL::REAL, CURRENT_TIMESTAMP
         FROM items i
         INNER JOIN sources s ON i.source_id = s.id
         INNER JOIN feeds f ON f.source_id = s.id
         LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id
         WHERE (f.owner_id = $1 OR fs.user_id = $1)
           AND i.published_at >= $2
+          AND ($3::TIMESTAMPTZ IS NULL OR i.published_at < $3)
         ON CONFLICT (user_id, item_id)
         DO UPDATE SET is_read = true, marked_at = CURRENT_TIMESTAMP
         "#,
         user_id,
-        payload.since
+        payload.since,
+        payload.before
     )
     .execute(&state.db)
     .await
@@ -675,7 +680,7 @@ pub async fn get_clusters(
             i.title, i.link, i.content, i.author,
             i.published_at, i.cluster_id, i.created_at,
             ir.is_read as "is_read?",
-            ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+            ROUND(ir.liked)::REAL as "liked?",
             ip.score as "prediction_score?"
         FROM items i
         INNER JOIN sources s ON i.source_id = s.id
@@ -756,18 +761,19 @@ pub async fn update_cluster_status(
             WHERE i.cluster_id = $2 OR (i.cluster_id IS NULL AND i.id = $2)
         )
         INSERT INTO item_reads (user_id, item_id, is_read, liked, marked_at)
-        SELECT $1, id, COALESCE($3::BOOLEAN, true), COALESCE($4::REAL, 0.0), CURRENT_TIMESTAMP
+        SELECT $1, id, COALESCE($3::BOOLEAN, true), $4::REAL, CURRENT_TIMESTAMP
         FROM target_items
         ON CONFLICT (user_id, item_id)
         DO UPDATE SET
             is_read = COALESCE($3::BOOLEAN, item_reads.is_read),
-            liked = COALESCE($4::REAL, item_reads.liked),
+            liked = CASE WHEN $5::BOOLEAN THEN $4::REAL ELSE item_reads.liked END,
             marked_at = CURRENT_TIMESTAMP
         "#,
         user_id,
         id,
         payload.is_read,
-        payload.liked
+        payload.liked.flatten(),
+        payload.liked.is_some()
     )
     .execute(&state.db)
     .await
@@ -783,7 +789,7 @@ pub async fn update_cluster_status(
     Ok(Json(ClusterStatusResponse {
         updated_items: result.rows_affected() as i64,
         is_read: payload.is_read.unwrap_or(true),
-        liked: payload.liked.unwrap_or(0.0),
+        liked: payload.liked.flatten(),
     }))
 }
 
@@ -896,7 +902,7 @@ pub async fn get_feed_clusters(
             i.title, i.link, i.content, i.author,
             i.published_at, i.cluster_id, i.created_at,
             ir.is_read as "is_read?",
-            ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+            ROUND(ir.liked)::REAL as "liked?",
             ip.score as "prediction_score?"
         FROM items i
         INNER JOIN sources s ON i.source_id = s.id
@@ -1006,9 +1012,10 @@ pub async fn mark_feed_clusters_read(
             FROM items i
             INNER JOIN feeds f ON i.source_id = f.source_id
             WHERE f.id = $2 AND i.published_at >= $3
+              AND ($4::TIMESTAMPTZ IS NULL OR i.published_at < $4)
         )
         INSERT INTO item_reads (user_id, item_id, is_read, liked, marked_at)
-        SELECT DISTINCT $1::uuid, i.id, true, 0.0, CURRENT_TIMESTAMP
+        SELECT DISTINCT $1::uuid, i.id, true, NULL::REAL, CURRENT_TIMESTAMP
         FROM items i
         WHERE
             (i.cluster_id IS NULL AND i.id IN (SELECT id FROM target_scope))
@@ -1019,7 +1026,8 @@ pub async fn mark_feed_clusters_read(
         "#,
         user_id,
         feed_id,
-        payload.since
+        payload.since,
+        payload.before
     )
     .execute(&state.db)
     .await
