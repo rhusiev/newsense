@@ -15,7 +15,9 @@ from embeddings.config import (
     BATCH_SIZE,
     RECONCILIATION_INTERVAL_MINUTES,
     TRAINING_INTERVAL_MINUTES,
+    THREADS_INTERVAL_MINUTES,
 )
+from embeddings.threads import update_threads
 from embeddings.clustering import process_item_logic
 from embeddings.utils import encode_texts
 from embeddings.training import train_user_preference_model, get_users_needing_training
@@ -108,6 +110,17 @@ async def training_worker():
             logger.error(f"Training worker error: {e}")
 
 
+async def threads_worker():
+    interval_seconds = THREADS_INTERVAL_MINUTES * 60
+    while not shutdown_event.is_set():
+        try:
+            async with db_pool.acquire() as conn:
+                await update_threads(conn)
+        except Exception as e:
+            logger.error(f"Threads worker error: {e}")
+        await asyncio.sleep(interval_seconds)
+
+
 async def startup():
     global db_pool, valkey_client, model, tokenizer
 
@@ -147,9 +160,10 @@ async def main():
     queue_task = asyncio.create_task(process_queue_consumer())
     reconciliation_task = asyncio.create_task(reconciliation_worker())
     training_task = asyncio.create_task(training_worker())
+    threads_task = asyncio.create_task(threads_worker())
 
     try:
-        await asyncio.gather(queue_task, reconciliation_task, training_task)
+        await asyncio.gather(queue_task, reconciliation_task, training_task, threads_task)
     except KeyboardInterrupt:
         logger.info("Received shutdown signal")
     finally:
