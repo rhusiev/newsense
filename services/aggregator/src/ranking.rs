@@ -61,6 +61,42 @@ pub async fn top_clusters(
     feed_id: Option<Uuid>,
     params: &GetClustersQuery,
 ) -> Result<Vec<ClusterResponse>, ApiError> {
+    let scope = scope(state, top_n, feed_id, params).await?;
+    let limit = params.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
+    let unread_only = params.unread_only.unwrap_or(false);
+    let picked = pick_entities(state, user_id, &scope, params.before, unread_only, limit).await?;
+    log_exposures(state, user_id, &picked).await?;
+
+    let ids: Vec<Uuid> = picked.iter().map(|p| p.entity_id).collect();
+    let mut clusters = group_clusters(fetch_items(state, user_id, &ids).await?);
+    for cluster in &mut clusters {
+        cluster.explored = picked
+            .iter()
+            .any(|p| p.entity_id == cluster.id && p.policy != TOP_POLICY);
+    }
+    Ok(clusters)
+}
+
+/// Counts the unread clusters the top-N list would show over its whole window,
+/// for the sidebar badge. Logs no exposures: nothing is shown.
+pub async fn count_unread_top(
+    state: &AppState,
+    user_id: Uuid,
+    top_n: i64,
+    params: &GetClustersQuery,
+) -> Result<i64, ApiError> {
+    let scope = scope(state, top_n, None, params).await?;
+    let all_days = MAX_TOP_N * LOOKBACK_DAYS as i64;
+    let picked = pick_entities(state, user_id, &scope, None, true, all_days).await?;
+    Ok(picked.len() as i64)
+}
+
+async fn scope<'a>(
+    state: &AppState,
+    top_n: i64,
+    feed_id: Option<Uuid>,
+    params: &'a GetClustersQuery,
+) -> Result<Scope<'a>, ApiError> {
     if !(1..=MAX_TOP_N).contains(&top_n) {
         return Err(bad_request(format!(
             "top_n must be between 1 and {MAX_TOP_N}"
@@ -76,25 +112,13 @@ pub async fn top_clusters(
     if !is_known_tz(state, tz).await? {
         return Err(bad_request(format!("unknown time zone {tz}")));
     }
-
-    let scope = Scope {
+    Ok(Scope {
         top_n,
         explore,
         tz,
         feed_id,
         per_feed: params.per_feed.unwrap_or(false),
-    };
-    let picked = pick_entities(state, user_id, &scope, params).await?;
-    log_exposures(state, user_id, &picked).await?;
-
-    let ids: Vec<Uuid> = picked.iter().map(|p| p.entity_id).collect();
-    let mut clusters = group_clusters(fetch_items(state, user_id, &ids).await?);
-    for cluster in &mut clusters {
-        cluster.explored = picked
-            .iter()
-            .any(|p| p.entity_id == cluster.id && p.policy != TOP_POLICY);
-    }
-    Ok(clusters)
+    })
 }
 
 async fn is_known_tz(state: &AppState, tz: &str) -> Result<bool, ApiError> {
@@ -125,7 +149,9 @@ async fn pick_entities(
     state: &AppState,
     user_id: Uuid,
     scope: &Scope<'_>,
-    params: &GetClustersQuery,
+    before: Option<time::OffsetDateTime>,
+    unread_only: bool,
+    limit: i64,
 ) -> Result<Vec<Picked>, ApiError> {
     sqlx::query_as!(
         Picked,
@@ -213,14 +239,14 @@ async fn pick_entities(
         LIMIT $9
         "#,
         user_id,
-        params.before,
+        before,
         scope.tz,
         scope.top_n,
         scope.explore as f64,
         scope.per_feed,
         scope.feed_id,
-        params.unread_only.unwrap_or(false),
-        params.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT),
+        unread_only,
+        limit,
         LOOKBACK_DAYS
     )
     .fetch_all(&state.db)

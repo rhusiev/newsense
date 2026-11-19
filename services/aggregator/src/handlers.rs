@@ -765,8 +765,12 @@ pub async fn update_cluster_status(
 pub async fn get_cluster_unread_count(
     State(state): State<AppState>,
     AuthUser { id: user_id, .. }: AuthUser,
-    Query(params): Query<GetUnreadCountsQuery>,
+    Query(params): Query<GetClustersQuery>,
 ) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if let Some(top_n) = params.top_n {
+        let unread_count = ranking::count_unread_top(&state, user_id, top_n, &params).await?;
+        return Ok(Json(UnreadCountResponse { unread_count }));
+    }
     let count = sqlx::query!(
         r#"
         SELECT COUNT(DISTINCT COALESCE(i.cluster_id, i.id)) as "count!"
