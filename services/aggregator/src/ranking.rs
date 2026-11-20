@@ -11,7 +11,7 @@ use axum::{Json, http::StatusCode};
 use uuid::Uuid;
 
 use crate::{
-    handlers::group_clusters,
+    handlers::{group_clusters, log_impressions, story_ids},
     models::{ClusterResponse, ErrorResponse, GetClustersQuery, ItemResponse},
     state::AppState,
 };
@@ -85,6 +85,12 @@ pub async fn top_clusters(
             .iter()
             .any(|p| p.entity_id == cluster.id && p.policy != TOP_POLICY);
     }
+    log_impressions(
+        state,
+        user_id,
+        &clusters.iter().map(|c| c.id).collect::<Vec<_>>(),
+    )
+    .await;
     Ok(clusters)
 }
 
@@ -112,7 +118,9 @@ pub async fn top_items(
     .await?;
     log_exposures(state, user_id, &picked).await?;
     let ids: Vec<Uuid> = picked.iter().map(|p| p.entity_id).collect();
-    fetch_items(state, user_id, &ids, false).await
+    let items = fetch_items(state, user_id, &ids, false).await?;
+    log_impressions(state, user_id, &story_ids(&items)).await;
+    Ok(items)
 }
 
 /// Counts the unread entities the top-N list would show over its whole window,

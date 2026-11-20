@@ -190,3 +190,13 @@ CREATE INDEX idx_clusters_last_updated ON clusters(last_updated_at);
 
 CREATE INDEX idx_items_embedding_hnsw ON items USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX idx_clusters_centroid_hnsw ON clusters USING hnsw (centroid vector_cosine_ops);
+
+-- Stories that appeared in a user's list, for the automatic summary job.
+CREATE TABLE IF NOT EXISTS story_impressions (
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    story_id UUID NOT NULL,
+    first_shown_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, story_id)
+);
+CREATE INDEX IF NOT EXISTS idx_story_impressions_user_shown
+    ON story_impressions(user_id, first_shown_at);

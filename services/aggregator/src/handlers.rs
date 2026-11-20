@@ -201,6 +201,7 @@ pub async fn get_feed_items(
         )
     })?;
 
+    log_impressions(&state, user_id, &story_ids(&items)).await;
     Ok(Json(items))
 }
 
@@ -305,6 +306,7 @@ pub async fn get_all_items(
     }
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
+    log_impressions(&state, user_id, &story_ids(&items)).await;
     Ok(Json(items))
 }
 
@@ -743,7 +745,14 @@ pub async fn get_clusters(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
-    Ok(Json(group_clusters(rows)))
+    let clusters = group_clusters(rows);
+    log_impressions(
+        &state,
+        user_id,
+        &clusters.iter().map(|c| c.id).collect::<Vec<_>>(),
+    )
+    .await;
+    Ok(Json(clusters))
 }
 
 pub async fn update_cluster_status(
@@ -1016,7 +1025,14 @@ pub async fn get_feed_clusters(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
-    Ok(Json(group_clusters(rows)))
+    let clusters = group_clusters(rows);
+    log_impressions(
+        &state,
+        user_id,
+        &clusters.iter().map(|c| c.id).collect::<Vec<_>>(),
+    )
+    .await;
+    Ok(Json(clusters))
 }
 
 pub async fn mark_feed_clusters_read(
@@ -1094,6 +1110,36 @@ pub async fn mark_feed_clusters_read(
     Ok(Json(MarkAllReadResponse {
         marked_count: result.rows_affected() as i64,
     }))
+}
+
+/// The story of each item: its cluster, or the item itself.
+pub(crate) fn story_ids(items: &[ItemResponse]) -> Vec<Uuid> {
+    items
+        .iter()
+        .map(|item| item.cluster_id.unwrap_or(item.id))
+        .collect()
+}
+
+/// Records the stories shown in a list. Best effort: a failed insert must not
+/// fail the read.
+pub(crate) async fn log_impressions(state: &AppState, user_id: Uuid, story_ids: &[Uuid]) {
+    if story_ids.is_empty() {
+        return;
+    }
+    let result = sqlx::query!(
+        r#"
+        INSERT INTO story_impressions (user_id, story_id)
+        SELECT $1, story_id FROM UNNEST($2::uuid[]) AS t(story_id)
+        ON CONFLICT (user_id, story_id) DO NOTHING
+        "#,
+        user_id,
+        story_ids
+    )
+    .execute(&state.db)
+    .await;
+    if let Err(e) = result {
+        eprintln!("story impressions: {e}");
+    }
 }
 
 /// Groups item rows into cluster cards, newest first. Singletons become one-item cards.
