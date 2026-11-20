@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS items (
     published_at TIMESTAMP WITH TIME ZONE,
     cluster_id UUID,
     embedding vector(384),
+    story_embedding vector(384),
     CONSTRAINT fk_items_clusters FOREIGN KEY (cluster_id) REFERENCES clusters(id),
 
     CONSTRAINT unique_item_per_source UNIQUE (source_id, guid)
@@ -193,6 +194,7 @@ CREATE INDEX idx_clusters_threads_unchecked ON clusters(created_at) WHERE thread
 CREATE INDEX idx_clusters_last_updated ON clusters(last_updated_at);
 
 CREATE INDEX idx_items_embedding_hnsw ON items USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX idx_items_story_embedding_hnsw ON items USING hnsw (story_embedding vector_cosine_ops);
 CREATE INDEX idx_clusters_centroid_hnsw ON clusters USING hnsw (centroid vector_cosine_ops);
 
 -- Stories that appeared in a user's list, for the automatic summary job.

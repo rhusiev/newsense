@@ -22,9 +22,11 @@ from .config import (
     LLM_BASE_URL,
     LLM_MODEL,
     LLM_PROVIDER_ROUTING,
+    LLM_REASONING,
     LLM_REQUEST_TIMEOUT_S,
     LLM_SUMMARY_MAX_ATTEMPTS,
     LLM_SUMMARY_MAX_CHARS,
+    LLM_SUMMARY_MAX_TOKENS,
     LLM_SUMMARY_MAX_WORDS,
     LLM_SUMMARY_SETTLE_HOURS,
     LLM_SUMMARY_BATCH,
@@ -204,12 +206,14 @@ async def _call_model(config, title: str, body: str, language: str | None) -> st
             {"role": "system", "content": system},
             {"role": "user", "content": f"Story: {title}\n\n{body}"},
         ],
-        "max_tokens": 400,
+        "max_tokens": LLM_SUMMARY_MAX_TOKENS,
         "temperature": 0.3,
     }
     provider = _provider_routing()
     if provider:
         payload["provider"] = provider
+    if LLM_REASONING:
+        payload["reasoning"] = json.loads(LLM_REASONING)
     async with httpx.AsyncClient(timeout=LLM_REQUEST_TIMEOUT_S) as client:
         response = await client.post(
             url,

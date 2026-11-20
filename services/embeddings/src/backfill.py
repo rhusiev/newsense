@@ -7,7 +7,7 @@ import numpy as np
 from tqdm import tqdm
 
 from embeddings.config import DATABASE_URL, EMBEDDING_MODEL_NAME, BATCH_SIZE
-from embeddings.clustering import process_item_logic
+from embeddings.clustering import process_item_logic, backfill_story_embedding
 from embeddings.utils import encode_texts
 from embeddings.training import train_user_preference_model, get_users_needing_training
 from embeddings.predictions import load_all_models, generate_predictions_for_item
@@ -57,6 +57,29 @@ async def run_backfill():
                     for row in rows:
                         try:
                             await process_item_logic(
+                                conn, encode_texts_wrapper, str(row["id"])
+                            )
+                        except Exception as e:
+                            print(f"Error processing {row['id']}: {e}")
+                        pbar.update(1)
+                pbar.close()
+
+            count = await conn.fetchval(
+                "SELECT count(*) FROM items WHERE story_embedding IS NULL"
+            )
+            if count > 0:
+                print(f"Found {count} items needing story embeddings.")
+                pbar = tqdm(total=count, desc="Story embeddings")
+                while True:
+                    rows = await conn.fetch(
+                        "SELECT id FROM items WHERE story_embedding IS NULL LIMIT $1",
+                        BATCH_SIZE,
+                    )
+                    if not rows:
+                        break
+                    for row in rows:
+                        try:
+                            await backfill_story_embedding(
                                 conn, encode_texts_wrapper, str(row["id"])
                             )
                         except Exception as e:

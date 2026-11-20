@@ -64,13 +64,19 @@ docker exec -it newsense_db psql -U newsense_user -d newsense_db
 
 ```sql
 BEGIN;
-UPDATE items 
-SET embedding = NULL, 
+UPDATE items
+SET embedding = NULL,
+    story_embedding = NULL,
     cluster_id = NULL;
 DELETE FROM clusters;
 DELETE FROM threads;
 COMMIT;
 ```
+
+Story threads group settled stories with Leiden on a kNN graph of the full-text
+`items.story_embedding` vectors. The worker stores that vector next to the
+cluster and preference vectors when it embeds an article. Existing items need a
+backfill before threads regroup them.
 
 `init.sql` only runs on an empty volume, so an existing deployment needs the
 files in `infrastructure/postgres/migrations/` applied by hand:
@@ -103,7 +109,9 @@ A user may supply their own endpoint and key with `PUT /settings/llm-key`
 For OpenRouter, set `LLM_BASE_URL=https://openrouter.ai/api/v1`,
 `LLM_MODEL=z-ai/glm-5.3-flash`, and optionally
 `LLM_PROVIDER_ROUTING='{"data_collection":"deny","zdr":true}'` to keep full text
-on zero-retention providers.
+on zero-retention providers. GLM 5.3 Flash is a reasoning model. Set
+`LLM_REASONING='{"effort":"low"}'` and keep `LLM_SUMMARY_MAX_TOKENS` at 700 or
+higher, or most calls return no summary after spending the budget on reasoning.
 
 TODO:
 - no volume mounts for prod

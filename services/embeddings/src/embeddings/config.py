@@ -29,13 +29,12 @@ EMBEDDING_DIM = 384
 REPLAY_BUFFER_SIZE = 64
 MIN_TRAINING_SAMPLES = 5
 
-# Story threads (replay of 2026 data, 28 days: 0.90 / 0.20 joined 193 threads of 3+ stories).
-THREAD_EMBEDDING_MIN = 0.90
-THREAD_TITLE_WORDS_MIN = 0.20
-THREAD_GAP_DAYS = 7
-# A story is compared with this many of the thread's latest stories.
-THREAD_RECENT_STORIES = 5
-# Rare-word weights come from the titles of this many days.
+# Story threads: Leiden communities in a kNN graph of full-text embeddings.
+# Tuned on two reviewed weeks: pairwise F1 about 0.54 on each.
+THREAD_KNN = 20
+THREAD_EMBEDDING_MIN = 0.86
+THREAD_RESOLUTION = 40.0
+# Stories from this many days are grouped together.
 THREAD_VOCABULARY_DAYS = 28
 # A story is threaded once it is this old, so most of its articles have joined it.
 THREAD_SETTLE_HOURS = 6
@@ -52,6 +51,9 @@ LLM_SUMMARY_INTERVAL_MINUTES = int(os.getenv("LLM_SUMMARY_INTERVAL_MINUTES", "5"
 LLM_SUMMARY_BATCH = int(os.getenv("LLM_SUMMARY_BATCH", "5"))
 LLM_SUMMARY_MAX_WORDS = 180
 LLM_SUMMARY_MAX_CHARS = 12000
+LLM_SUMMARY_MAX_TOKENS = int(os.getenv("LLM_SUMMARY_MAX_TOKENS", "700"))
 LLM_SUMMARY_SETTLE_HOURS = 6
 LLM_SUMMARY_MAX_ATTEMPTS = 3
 LLM_REQUEST_TIMEOUT_S = 90.0
+# Optional JSON object sent as the provider's reasoning field, e.g. {"effort":"low"}.
+LLM_REASONING = os.getenv("LLM_REASONING", "").strip()
