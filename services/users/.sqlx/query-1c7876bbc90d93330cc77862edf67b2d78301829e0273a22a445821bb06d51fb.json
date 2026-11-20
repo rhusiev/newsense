@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT all_articles_filter, score_threshold, top_per_day, use_clusters, reader_layout\n           FROM user_settings WHERE user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "all_articles_filter",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "score_threshold",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 2,
+        "name": "top_per_day",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "use_clusters",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "reader_layout",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1c7876bbc90d93330cc77862edf67b2d78301829e0273a22a445821bb06d51fb"
+}

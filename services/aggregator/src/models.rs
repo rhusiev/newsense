@@ -28,7 +28,7 @@ pub struct GetClustersQuery {
     pub explore: Option<f32>,
     /// IANA time zone that decides where a day starts, such as `Europe/Kyiv`.
     pub tz: Option<String>,
-    /// With `top_n` on the merged list: keep each feed's own N before merging.
+    /// On the merged list: apply each feed's own filter before merging.
     pub per_feed: Option<bool>,
 }
 

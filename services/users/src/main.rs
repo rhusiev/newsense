@@ -220,7 +220,7 @@ async fn main() {
         .route("/feeds/{id}", delete(delete_feed))
         .route("/feeds/{id}/subscription", post(subscribe_feed))
         .route("/feeds/{id}/subscription", delete(unsubscribe_feed))
-        .route("/feeds/{id}/top-n", put(settings::set_feed_top_n))
+        .route("/feeds/{id}/filter", put(settings::set_feed_filter))
         .route(
             "/settings",
             get(settings::get_settings).put(settings::update_settings),

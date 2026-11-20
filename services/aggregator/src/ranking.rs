@@ -24,7 +24,8 @@ const MAX_EXPLORE: f32 = 0.5;
 const DEFAULT_TZ: &str = "UTC";
 const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 100;
-/// Days ranked before the cursor on each page. Older pages move the window.
+/// Days ranked before the cursor on each page at least; the window also reaches
+/// back to the oldest unread article, so a backlog is never cut off.
 const LOOKBACK_DAYS: i32 = 31;
 const TOP_POLICY: &str = "top";
 
@@ -52,8 +53,9 @@ struct Picked {
 }
 
 /// Ranks the user's subscribed feeds together, or only `feed_id` when given.
-/// With `per_feed`, each feed keeps its own N (its `feed_subscriptions.top_n`,
-/// else `top_n`) before the lists merge; otherwise one N applies to the merged list.
+/// With `per_feed`, each feed applies its own filter (`feed_subscriptions.filter_mode`:
+/// 'off' passes every story, 'score' its threshold, 'top' its own N) before the
+/// lists merge; otherwise one N (`top_n`) applies to the merged list.
 pub async fn top_clusters(
     state: &AppState,
     user_id: Uuid,
@@ -86,7 +88,8 @@ pub async fn count_unread_top(
     params: &GetClustersQuery,
 ) -> Result<i64, ApiError> {
     let scope = scope(state, top_n, None, params).await?;
-    let all_days = MAX_TOP_N * LOOKBACK_DAYS as i64;
+    // The window can span months of backlog; count all of it.
+    let all_days = i64::from(i32::MAX);
     let picked = pick_entities(state, user_id, &scope, None, true, all_days).await?;
     Ok(picked.len() as i64)
 }
@@ -140,7 +143,8 @@ struct Scope<'a> {
 }
 
 /// Ranks each day's clusters by their best item score, within each feed when
-/// `per_feed`, and picks the shown ones. Of N slots, round(N * explore) go to
+/// `per_feed`, and picks the shown ones. Feeds filtered by 'off' or 'score'
+/// pass their stories without ranking or exploration. Of N slots, round(N * explore) go to
 /// exploration: half of them, rounded up, to the N ranks just below the kept
 /// ones, the rest to everything lower. A day counts only when the window
 /// covers all of it. A cluster picked in several feeds is shown once, with its
@@ -156,20 +160,34 @@ async fn pick_entities(
     sqlx::query_as!(
         Picked,
         r#"
-        WITH window_start AS (
-            SELECT COALESCE($2::timestamptz, now()) - make_interval(days => $10) AS at
-        ),
-        scoped_feeds AS (
+        WITH scoped_feeds AS (
             SELECT f.id AS feed_id, f.source_id,
-                CASE WHEN $6::boolean THEN COALESCE(fs.top_n::bigint, $4::bigint) ELSE $4::bigint END AS n
+                CASE WHEN $6::boolean THEN fs.filter_mode ELSE 'top' END AS mode,
+                CASE WHEN $6::boolean THEN fs.top_n::bigint ELSE $4::bigint END AS n,
+                fs.score_threshold::float8 AS threshold
             FROM feeds f
             LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $1
             WHERE ($7::uuid IS NULL AND fs.user_id IS NOT NULL) OR f.id = $7
         ),
+        cursor_at AS (SELECT COALESCE($2::timestamptz, now()) AS at),
+        -- Reaches back to the oldest unread article before the cursor, and at least $10 days.
+        window_start AS (
+            SELECT LEAST(
+                (SELECT at FROM cursor_at) - make_interval(days => $10),
+                (SELECT MIN(i.published_at) - interval '1 day'
+                 FROM items i
+                 JOIN scoped_feeds sf ON sf.source_id = i.source_id
+                 LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $1
+                 WHERE COALESCE(ir.is_read, false) = false
+                   AND i.published_at < (SELECT at FROM cursor_at))
+            ) AS at
+        ),
         entities AS (
             SELECT
                 CASE WHEN $6::boolean THEN sf.feed_id END AS scope_id,
+                MAX(sf.mode) AS mode,
                 MAX(sf.n) AS n,
+                MAX(sf.threshold) AS threshold,
                 COALESCE(i.cluster_id, i.id) AS entity_id,
                 MAX(i.published_at) AS max_date,
                 MAX(COALESCE(ip.score, 0.0))::float8 AS score,
@@ -179,7 +197,7 @@ async fn pick_entities(
             LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $1
             LEFT JOIN item_predictions ip ON ip.item_id = i.id AND ip.user_id = $1
             WHERE i.published_at >= (SELECT at FROM window_start)
-            GROUP BY 1, 3
+            GROUP BY 1, 5
         ),
         ranked AS (
             SELECT e.*, d.day, sl.keep, sl.boundary, sl.explored - sl.boundary AS random,
@@ -196,6 +214,8 @@ async fn pick_entities(
         pooled AS (
             SELECT r.*,
                 CASE
+                    WHEN mode = 'off' THEN 'top'
+                    WHEN mode = 'score' THEN CASE WHEN score >= threshold THEN 'top' ELSE 'hidden' END
                     WHEN rnk <= keep THEN 'top'
                     WHEN rnk <= keep + n THEN 'boundary'
                     ELSE 'random'
