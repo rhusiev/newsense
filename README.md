@@ -100,6 +100,11 @@ A user may supply their own endpoint and key with `PUT /settings/llm-key`
 `GET /settings/llm-key` shows only whether it is set, the URL and the model.
 `DELETE /settings/llm-key` removes it.
 
+For OpenRouter, set `LLM_BASE_URL=https://openrouter.ai/api/v1`,
+`LLM_MODEL=z-ai/glm-5.3-flash`, and optionally
+`LLM_PROVIDER_ROUTING='{"data_collection":"deny","zdr":true}'` to keep full text
+on zero-retention providers.
+
 TODO:
 - no volume mounts for prod
 - reorder

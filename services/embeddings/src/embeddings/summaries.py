@@ -8,16 +8,20 @@ failed attempts back off and count toward the daily limit.
 
 import base64
 import hashlib
+import json
 import logging
 import os
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import httpx
+from langdetect import DetectorFactory, detect
+from langdetect.lang_detect_exception import LangDetectException
 
 from .config import (
     LLM_API_KEY,
     LLM_BASE_URL,
     LLM_MODEL,
+    LLM_PROVIDER_ROUTING,
     LLM_REQUEST_TIMEOUT_S,
     LLM_SUMMARY_MAX_ATTEMPTS,
     LLM_SUMMARY_MAX_CHARS,
@@ -27,6 +31,7 @@ from .config import (
 )
 
 logger = logging.getLogger("summaries")
+DetectorFactory.seed = 0
 
 CANDIDATES = """
     SELECT si.user_id, si.story_id, us.llm_daily_limit
@@ -113,11 +118,42 @@ RECORD_CALL = """
 """
 
 SYSTEM = (
-    "You summarize news stories for a reader. Write in the language of the "
-    "articles. Use at most 180 words in one plain paragraph. Say what happened, "
-    "what changed and what is still open. Use only facts from the articles. No "
-    "headings, lists or markdown."
+    "You summarize news stories for a reader. Use at most 180 words in one plain "
+    "paragraph. Say what happened, what changed and what is still open. Use only "
+    "facts from the articles. No headings, lists or markdown."
 )
+
+LANGUAGE_NAMES = {
+    "ar": "Arabic",
+    "de": "German",
+    "en": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "it": "Italian",
+    "pl": "Polish",
+    "ru": "Russian",
+    "tr": "Turkish",
+    "uk": "Ukrainian",
+}
+
+
+def _language(rows) -> str | None:
+    sample = " ".join(f"{row['title']} {row['text']}" for row in rows)[:4000]
+    try:
+        code = detect(sample)
+    except LangDetectException:
+        return None
+    return LANGUAGE_NAMES.get(code.split("-")[0])
+
+
+def _provider_routing() -> dict | None:
+    if not LLM_PROVIDER_ROUTING:
+        return None
+    try:
+        return json.loads(LLM_PROVIDER_ROUTING)
+    except json.JSONDecodeError as e:
+        logger.warning(f"LLM_PROVIDER_ROUTING is not JSON: {e}")
+        return None
 
 
 def _decrypt_key(ciphertext: bytes, nonce: bytes) -> str:
@@ -143,29 +179,37 @@ async def _llm_config(conn, user_id):
     return None
 
 
-def _prepare(rows) -> tuple[str, str, str]:
-    """Title, prompt body and a hash of the source texts."""
+def _prepare(rows) -> tuple[str, str, str, str | None]:
+    """Title, prompt body, a hash of the source texts and their language."""
     title = rows[0]["title"]
     parts = [f"{row['title']}\n{row['text']}" for row in rows]
     body = "\n\n".join(parts)
     if len(body) > LLM_SUMMARY_MAX_CHARS:
         body = body[:LLM_SUMMARY_MAX_CHARS] + "\n[truncated]"
     source = "|".join(f"{row['id']}:{row['fetched_at'].isoformat()}" for row in rows)
-    return title, body, hashlib.sha256(source.encode()).hexdigest()
+    return title, body, hashlib.sha256(source.encode()).hexdigest(), _language(rows)
 
 
-async def _call_model(config, title: str, body: str) -> str:
+async def _call_model(config, title: str, body: str, language: str | None) -> str:
     base_url, model, api_key = config
     url = f"{base_url.rstrip('/')}/chat/completions"
+    system = SYSTEM + (
+        f" Write in {language}."
+        if language
+        else " Write in the language of the articles."
+    )
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM},
+            {"role": "system", "content": system},
             {"role": "user", "content": f"Story: {title}\n\n{body}"},
         ],
         "max_tokens": 400,
         "temperature": 0.3,
     }
+    provider = _provider_routing()
+    if provider:
+        payload["provider"] = provider
     async with httpx.AsyncClient(timeout=LLM_REQUEST_TIMEOUT_S) as client:
         response = await client.post(
             url,
@@ -207,10 +251,10 @@ async def update_summaries(conn) -> int:
         texts = await conn.fetch(STORY_TEXT, user_id, story_id)
         if not texts:
             continue
-        title, body, source_hash = _prepare(texts)
+        title, body, source_hash, language = _prepare(texts)
 
         try:
-            summary = await _call_model(config, title, body)
+            summary = await _call_model(config, title, body, language)
         except Exception as e:
             logger.warning(f"Summary failed for story {story_id}: {e}")
             async with conn.transaction():
