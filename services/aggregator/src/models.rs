@@ -11,6 +11,29 @@ pub struct GetItemsQuery {
     pub unread_only: Option<bool>,
     pub score_min: Option<f32>,
     pub score_max: Option<f32>,
+    /// Keep the N best-scored items or stories of each day.
+    pub top_n: Option<i64>,
+    pub explore: Option<f32>,
+    pub tz: Option<String>,
+    pub per_feed: Option<bool>,
+}
+
+impl GetItemsQuery {
+    /// The ranking fields, for a list that keeps a daily top N.
+    pub fn ranked(&self) -> GetClustersQuery {
+        GetClustersQuery {
+            limit: self.limit,
+            before: self.before,
+            unread_only: self.unread_only,
+            feed_id: None,
+            score_min: self.score_min,
+            score_max: self.score_max,
+            top_n: self.top_n,
+            explore: self.explore,
+            tz: self.tz.clone(),
+            per_feed: self.per_feed,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -36,6 +59,28 @@ pub struct GetClustersQuery {
 pub struct GetUnreadCountsQuery {
     pub score_min: Option<f32>,
     pub score_max: Option<f32>,
+    pub top_n: Option<i64>,
+    pub explore: Option<f32>,
+    pub tz: Option<String>,
+    pub per_feed: Option<bool>,
+}
+
+impl GetUnreadCountsQuery {
+    /// The ranking fields, for a badge that counts a daily top N.
+    pub fn ranked(&self) -> GetClustersQuery {
+        GetClustersQuery {
+            limit: None,
+            before: None,
+            unread_only: Some(true),
+            feed_id: None,
+            score_min: self.score_min,
+            score_max: self.score_max,
+            top_n: self.top_n,
+            explore: self.explore,
+            tz: self.tz.clone(),
+            per_feed: self.per_feed,
+        }
+    }
 }
 
 #[derive(Deserialize)]

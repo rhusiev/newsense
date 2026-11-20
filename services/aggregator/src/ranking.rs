@@ -66,11 +66,20 @@ pub async fn top_clusters(
     let scope = scope(state, top_n, feed_id, params).await?;
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
     let unread_only = params.unread_only.unwrap_or(false);
-    let picked = pick_entities(state, user_id, &scope, params.before, unread_only, limit).await?;
+    let picked = pick_entities(
+        state,
+        user_id,
+        &scope,
+        params.before,
+        unread_only,
+        limit,
+        true,
+    )
+    .await?;
     log_exposures(state, user_id, &picked).await?;
 
     let ids: Vec<Uuid> = picked.iter().map(|p| p.entity_id).collect();
-    let mut clusters = group_clusters(fetch_items(state, user_id, &ids).await?);
+    let mut clusters = group_clusters(fetch_items(state, user_id, &ids, true).await?);
     for cluster in &mut clusters {
         cluster.explored = picked
             .iter()
@@ -79,18 +88,56 @@ pub async fn top_clusters(
     Ok(clusters)
 }
 
-/// Counts the unread clusters the top-N list would show over its whole window,
+/// Ranks individual items for a list that does not group stories. Each item is
+/// its own entity, so the daily N keeps N articles and exploration works the same.
+pub async fn top_items(
+    state: &AppState,
+    user_id: Uuid,
+    top_n: i64,
+    feed_id: Option<Uuid>,
+    params: &GetClustersQuery,
+) -> Result<Vec<ItemResponse>, ApiError> {
+    let scope = scope(state, top_n, feed_id, params).await?;
+    let limit = params.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
+    let unread_only = params.unread_only.unwrap_or(false);
+    let picked = pick_entities(
+        state,
+        user_id,
+        &scope,
+        params.before,
+        unread_only,
+        limit,
+        false,
+    )
+    .await?;
+    log_exposures(state, user_id, &picked).await?;
+    let ids: Vec<Uuid> = picked.iter().map(|p| p.entity_id).collect();
+    fetch_items(state, user_id, &ids, false).await
+}
+
+/// Counts the unread entities the top-N list would show over its whole window,
 /// for the sidebar badge. Logs no exposures: nothing is shown.
 pub async fn count_unread_top(
     state: &AppState,
     user_id: Uuid,
     top_n: i64,
     params: &GetClustersQuery,
+    feed_id: Option<Uuid>,
+    group_stories: bool,
 ) -> Result<i64, ApiError> {
-    let scope = scope(state, top_n, None, params).await?;
+    let scope = scope(state, top_n, feed_id, params).await?;
     // The window can span months of backlog; count all of it.
     let all_days = i64::from(i32::MAX);
-    let picked = pick_entities(state, user_id, &scope, None, true, all_days).await?;
+    let picked = pick_entities(
+        state,
+        user_id,
+        &scope,
+        None,
+        true,
+        all_days,
+        group_stories,
+    )
+    .await?;
     Ok(picked.len() as i64)
 }
 
@@ -156,6 +203,7 @@ async fn pick_entities(
     before: Option<time::OffsetDateTime>,
     unread_only: bool,
     limit: i64,
+    group_stories: bool,
 ) -> Result<Vec<Picked>, ApiError> {
     sqlx::query_as!(
         Picked,
@@ -188,7 +236,7 @@ async fn pick_entities(
                 MAX(sf.mode) AS mode,
                 MAX(sf.n) AS n,
                 MAX(sf.threshold) AS threshold,
-                COALESCE(i.cluster_id, i.id) AS entity_id,
+                CASE WHEN $11::boolean THEN COALESCE(i.cluster_id, i.id) ELSE i.id END AS entity_id,
                 MAX(i.published_at) AS max_date,
                 MAX(COALESCE(ip.score, 0.0))::float8 AS score,
                 BOOL_AND(COALESCE(ir.is_read, false)) AS all_read
@@ -267,7 +315,8 @@ async fn pick_entities(
         scope.feed_id,
         unread_only,
         limit,
-        LOOKBACK_DAYS
+        LOOKBACK_DAYS,
+        group_stories
     )
     .fetch_all(&state.db)
     .await
@@ -306,6 +355,7 @@ async fn fetch_items(
     state: &AppState,
     user_id: Uuid,
     entity_ids: &[Uuid],
+    group_stories: bool,
 ) -> Result<Vec<ItemResponse>, ApiError> {
     sqlx::query_as!(
         ItemResponse,
@@ -322,12 +372,13 @@ async fn fetch_items(
         INNER JOIN feeds f ON f.source_id = i.source_id
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
-        WHERE COALESCE(i.cluster_id, i.id) = ANY($2::uuid[])
+        WHERE (CASE WHEN $3::boolean THEN COALESCE(i.cluster_id, i.id) ELSE i.id END) = ANY($2::uuid[])
         GROUP BY i.id, ir.is_read, ir.liked, ip.score
         ORDER BY i.published_at DESC
         "#,
         user_id,
-        entity_ids
+        entity_ids,
+        group_stories
     )
     .fetch_all(&state.db)
     .await

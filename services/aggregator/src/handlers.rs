@@ -55,6 +55,12 @@ pub async fn get_feed_items(
         ));
     }
 
+    if let Some(top_n) = params.top_n {
+        return ranking::top_items(&state, user_id, top_n, Some(feed_id), &params.ranked())
+            .await
+            .map(Json);
+    }
+
     let limit = params.limit.unwrap_or(50).min(1000);
     let unread_only = params.unread_only.unwrap_or(false);
 
@@ -203,6 +209,11 @@ pub async fn get_all_items(
     AuthUser { id: user_id, .. }: AuthUser,
     Query(params): Query<GetItemsQuery>,
 ) -> Result<Json<Vec<ItemResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    if let Some(top_n) = params.top_n {
+        return ranking::top_items(&state, user_id, top_n, None, &params.ranked())
+            .await
+            .map(Json);
+    }
     let limit = params.limit.unwrap_or(50).min(1000);
     let unread_only = params.unread_only.unwrap_or(false);
 
@@ -513,6 +524,19 @@ pub async fn get_feed_unread_count(
         ));
     }
 
+    if let Some(top_n) = params.top_n {
+        let unread_count = ranking::count_unread_top(
+            &state,
+            user_id,
+            top_n,
+            &params.ranked(),
+            Some(feed_id),
+            false,
+        )
+        .await?;
+        return Ok(Json(UnreadCountResponse { unread_count }));
+    }
+
     let count = sqlx::query!(
         r#"
         SELECT COUNT(DISTINCT i.id) as "count!"
@@ -550,6 +574,12 @@ pub async fn get_all_unread_count(
     AuthUser { id: user_id, .. }: AuthUser,
     Query(params): Query<GetUnreadCountsQuery>,
 ) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if let Some(top_n) = params.top_n {
+        let unread_count =
+            ranking::count_unread_top(&state, user_id, top_n, &params.ranked(), None, false)
+                .await?;
+        return Ok(Json(UnreadCountResponse { unread_count }));
+    }
     let count = sqlx::query!(
         r#"
         SELECT COUNT(DISTINCT i.id) as "count!"
@@ -762,13 +792,92 @@ pub async fn update_cluster_status(
     }))
 }
 
+pub async fn get_feed_cluster_unread_count(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+    Path(feed_id): Path<Uuid>,
+    Query(params): Query<GetClustersQuery>,
+) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let has_access = sqlx::query!(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM feeds f
+            LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
+            WHERE f.id = $2 AND (f.is_public OR f.owner_id = $1 OR fs.user_id = $1)
+        ) as "has_access!"
+        "#,
+        user_id,
+        feed_id
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if !has_access.has_access {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Feed not found".into(),
+            }),
+        ));
+    }
+
+    if let Some(top_n) = params.top_n {
+        let unread_count =
+            ranking::count_unread_top(&state, user_id, top_n, &params, Some(feed_id), true)
+                .await?;
+        return Ok(Json(UnreadCountResponse { unread_count }));
+    }
+
+    let count = sqlx::query!(
+        r#"
+        SELECT COUNT(DISTINCT COALESCE(i.cluster_id, i.id)) as "count!"
+        FROM items i
+        INNER JOIN sources s ON i.source_id = s.id
+        INNER JOIN feeds f ON f.source_id = s.id
+        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
+        WHERE f.id = $2
+          AND (ir.is_read IS NULL OR ir.is_read = false)
+          AND ($3::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $3)
+          AND ($4::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $4)
+        "#,
+        user_id,
+        feed_id,
+        params.score_min,
+        params.score_max
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    Ok(Json(UnreadCountResponse {
+        unread_count: count.count,
+    }))
+}
+
 pub async fn get_cluster_unread_count(
     State(state): State<AppState>,
     AuthUser { id: user_id, .. }: AuthUser,
     Query(params): Query<GetClustersQuery>,
 ) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<ErrorResponse>)> {
     if let Some(top_n) = params.top_n {
-        let unread_count = ranking::count_unread_top(&state, user_id, top_n, &params).await?;
+        let unread_count =
+            ranking::count_unread_top(&state, user_id, top_n, &params, None, true).await?;
         return Ok(Json(UnreadCountResponse { unread_count }));
     }
     let count = sqlx::query!(
