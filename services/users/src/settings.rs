@@ -23,6 +23,9 @@ pub struct SettingsResponse {
     top_per_day: i32,
     use_clusters: bool,
     reader_layout: String,
+    llm_summaries: bool,
+    llm_allowed: bool,
+    llm_daily_limit: i32,
     /// Each subscribed feed's own filter, by feed id. Feeds absent here are 'off'.
     feed_filters: HashMap<Uuid, FeedFilter>,
 }
@@ -42,6 +45,9 @@ pub struct UpdateSettingsRequest {
     top_per_day: Option<i32>,
     use_clusters: Option<bool>,
     reader_layout: Option<String>,
+    /// The user's own switch. The daily limit and the admin allowance are not
+    /// writable here.
+    llm_summaries: Option<bool>,
 }
 
 fn db_error(e: sqlx::Error) -> ApiError {
@@ -83,7 +89,8 @@ async fn ensure_row(state: &AppState, user_id: Uuid) -> Result<(), ApiError> {
 
 async fn read_settings(state: &AppState, user_id: Uuid) -> Result<SettingsResponse, ApiError> {
     let s = sqlx::query!(
-        r#"SELECT all_articles_filter, score_threshold, top_per_day, use_clusters, reader_layout
+        r#"SELECT all_articles_filter, score_threshold, top_per_day, use_clusters, reader_layout,
+                  llm_summaries, llm_allowed, llm_daily_limit
            FROM user_settings WHERE user_id = $1"#,
         user_id
     )
@@ -104,6 +111,9 @@ async fn read_settings(state: &AppState, user_id: Uuid) -> Result<SettingsRespon
         top_per_day: s.top_per_day,
         use_clusters: s.use_clusters,
         reader_layout: s.reader_layout,
+        llm_summaries: s.llm_summaries,
+        llm_allowed: s.llm_allowed,
+        llm_daily_limit: s.llm_daily_limit,
         feed_filters: feeds
             .into_iter()
             .map(|f| {
@@ -133,6 +143,7 @@ pub async fn update_settings(
             top_per_day = COALESCE($4, top_per_day),
             use_clusters = COALESCE($5, use_clusters),
             reader_layout = COALESCE($6, reader_layout),
+            llm_summaries = COALESCE($7, llm_summaries),
             updated_at = CURRENT_TIMESTAMP
         WHERE user_id = $1
         "#,
@@ -141,7 +152,8 @@ pub async fn update_settings(
         p.score_threshold,
         p.top_per_day,
         p.use_clusters,
-        p.reader_layout
+        p.reader_layout,
+        p.llm_summaries
     )
     .execute(&state.db)
     .await

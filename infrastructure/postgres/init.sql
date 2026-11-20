@@ -168,6 +168,10 @@ CREATE TABLE IF NOT EXISTS user_settings (
     use_clusters BOOLEAN NOT NULL DEFAULT true,
     -- 'sheet': reader opens over the list; 'page': reader replaces the list
     reader_layout TEXT NOT NULL DEFAULT 'sheet' CHECK (reader_layout IN ('sheet', 'page')),
+    -- Opt-in LLM summaries of a story; the switch is the user's, the limit the admin's.
+    llm_summaries BOOLEAN NOT NULL DEFAULT false,
+    llm_allowed BOOLEAN NOT NULL DEFAULT true,
+    llm_daily_limit INTEGER NOT NULL DEFAULT 70 CHECK (llm_daily_limit BETWEEN 1 AND 10000),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -200,3 +204,30 @@ CREATE TABLE IF NOT EXISTS story_impressions (
 );
 CREATE INDEX IF NOT EXISTS idx_story_impressions_user_shown
     ON story_impressions(user_id, first_shown_at);
+
+
+-- One cached summary per user and story, with failed attempts backed off.
+CREATE TABLE IF NOT EXISTS story_summaries (
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    story_id UUID NOT NULL,
+    summary TEXT,
+    error TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    source_hash TEXT,
+    model TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, story_id)
+);
+
+-- Every model call, for the daily limit and for cost accounting.
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id BIGSERIAL PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    story_id UUID NOT NULL,
+    model TEXT NOT NULL,
+    success BOOLEAN NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_user_day ON llm_calls(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_story_summaries_pending
+    ON story_summaries(updated_at) WHERE summary IS NULL;

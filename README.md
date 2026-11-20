@@ -16,8 +16,13 @@ Features:<br/>
 - AI **Filtering**
   - *Like/dislike* articles, so that the system learns your preferences
   - Set a *threshold* of AI *confidence* in order for it to *filter out* articles you always skip
+  - Each feed can set its own filter; All Articles can use each feed's filter
   - Always skip the weather? - Dislike the weather articles, and they will stop showing up in time
   - *I hate AI* in places it doesn't belong to - but it's really *useful* in this context
+- Opt-in **story summaries**
+  - One short summary per story, from its full text, in the article's language
+  - Generated only for stories that appeared in your list, then cached
+  - Uses one OpenAI-compatible endpoint; the admin controls who may use it and the daily limit
 - Invite-only preference
   - Don't want strangers register at your hosted instance?
   - Disable open registration and send registration codes to your friends
@@ -74,6 +79,20 @@ files in `infrastructure/postgres/migrations/` applied by hand:
 docker exec -i newsense_db psql -U newsense_user -d newsense_db -v ON_ERROR_STOP=1 \
     < infrastructure/postgres/migrations/add_item_guid.sql
 ```
+
+The LLM summaries use one OpenAI-compatible endpoint. Set these in `.env`; the
+worker does nothing while any of the first three is empty:
+
+```sh
+LLM_BASE_URL=https://api.example.com/v1
+LLM_API_KEY=replace_me
+LLM_MODEL=your-model
+LLM_SUMMARY_INTERVAL_MINUTES=5
+```
+
+The daily limit is 70 per user; an admin can change it with
+`PUT /admin/users/{id}/llm` and `{"daily_limit": 100}`. Users opt in and out
+with `llm_summaries` in `PUT /settings`.
 
 TODO:
 - no volume mounts for prod

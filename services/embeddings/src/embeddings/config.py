@@ -40,3 +40,16 @@ THREAD_VOCABULARY_DAYS = 28
 # A story is threaded once it is this old, so most of its articles have joined it.
 THREAD_SETTLE_HOURS = 6
 THREADS_INTERVAL_MINUTES = int(os.getenv("THREADS_INTERVAL_MINUTES", "30"))
+
+# LLM story summaries. One OpenAI-compatible endpoint; the worker does nothing
+# while the base URL, model or key is empty.
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "")
+LLM_SUMMARY_INTERVAL_MINUTES = int(os.getenv("LLM_SUMMARY_INTERVAL_MINUTES", "5"))
+LLM_SUMMARY_BATCH = int(os.getenv("LLM_SUMMARY_BATCH", "5"))
+LLM_SUMMARY_MAX_WORDS = 180
+LLM_SUMMARY_MAX_CHARS = 12000
+LLM_SUMMARY_SETTLE_HOURS = 6
+LLM_SUMMARY_MAX_ATTEMPTS = 3
+LLM_REQUEST_TIMEOUT_S = 90.0

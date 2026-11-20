@@ -5,6 +5,8 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as BASE64};
 use rand::RngCore;
+use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::{
     extractors::AdminUser,
@@ -14,6 +16,23 @@ use crate::{
     },
     state::AppState,
 };
+
+fn db_error(e: sqlx::Error) -> (StatusCode, Json<ErrorResponse>) {
+    let invalid = e
+        .as_database_error()
+        .and_then(|d| d.code())
+        .is_some_and(|c| c == "23514");
+    (
+        if invalid {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        },
+        Json(ErrorResponse {
+            error: e.to_string(),
+        }),
+    )
+}
 
 fn generate_random_string(len: usize) -> String {
     let mut bytes = vec![0u8; len];
@@ -226,5 +245,61 @@ pub async fn delete_code(
 
 pub async fn admin_check(_admin: AdminUser) -> StatusCode {
     StatusCode::OK
+}
+
+#[derive(Deserialize)]
+pub struct SetUserLlmRequest {
+    pub allowed: Option<bool>,
+    pub daily_limit: Option<i32>,
+}
+
+/// Admin control of one user's LLM access and daily summary limit.
+pub async fn set_user_llm(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<SetUserLlmRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM users WHERE id = $1) as "exists!""#,
+        user_id
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(db_error)?;
+    if !exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "User not found".to_string(),
+            }),
+        ));
+    }
+
+    sqlx::query!(
+        "INSERT INTO user_settings (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
+        user_id
+    )
+    .execute(&state.db)
+    .await
+    .map_err(db_error)?;
+
+    sqlx::query!(
+        r#"
+        UPDATE user_settings SET
+            llm_allowed = COALESCE($2, llm_allowed),
+            llm_daily_limit = COALESCE($3, llm_daily_limit),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = $1
+        "#,
+        user_id,
+        payload.allowed,
+        payload.daily_limit
+    )
+    .execute(&state.db)
+    .await
+    .map_err(db_error)?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
