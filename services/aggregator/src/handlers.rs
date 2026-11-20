@@ -11,8 +11,8 @@ use crate::{
     models::{
         AllUnreadCountsResponse, ClusterResponse, ClusterStatusResponse, ErrorResponse,
         FeedUnreadCount, GetClustersQuery, GetItemsQuery, GetUnreadCountsQuery, ItemResponse,
-        MarkAllReadRequest, MarkAllReadResponse, ReadStatusResponse, UnreadCountResponse,
-        UpdateItemStatusRequest,
+        MarkAllReadRequest, MarkAllReadResponse, ReadStatusResponse, StorySummaryResponse,
+        UnreadCountResponse, UpdateItemStatusRequest,
     },
     ranking,
     state::AppState,
@@ -755,8 +755,48 @@ pub async fn get_clusters(
     Ok(Json(clusters))
 }
 
-pub async fn update_cluster_status(
+/// The user's cached summary of one story, if the worker has stored it.
+pub async fn get_story_summary(
     State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+    Path(story_id): Path<Uuid>,
+) -> Result<Json<StorySummaryResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let row = sqlx::query!(
+        r#"
+        SELECT summary, model, updated_at
+        FROM story_summaries
+        WHERE user_id = $1 AND story_id = $2 AND summary IS NOT NULL
+        "#,
+        user_id,
+        story_id
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    match row {
+        Some(row) => Ok(Json(StorySummaryResponse {
+            summary: row.summary.unwrap_or_default(),
+            model: row.model,
+            updated_at: row.updated_at,
+        })),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Summary not ready".into(),
+            }),
+        )),
+    }
+}
+
+pub async fn update_cluster_status(    State(state): State<AppState>,
     AuthUser { id: user_id, .. }: AuthUser,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateItemStatusRequest>,

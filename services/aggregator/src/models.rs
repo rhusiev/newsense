@@ -155,6 +155,14 @@ pub struct ClusterStatusResponse {
 }
 
 #[derive(Serialize)]
+pub struct StorySummaryResponse {
+    pub summary: String,
+    pub model: Option<String>,
+    #[serde(with = "time::serde::iso8601")]
+    pub updated_at: time::OffsetDateTime,
+}
+
+#[derive(Serialize)]
 pub struct UnreadCountResponse {
     pub unread_count: i64,
 }
