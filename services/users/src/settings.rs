@@ -32,6 +32,7 @@ pub struct SettingsResponse {
     llm_summaries: bool,
     llm_allowed: bool,
     llm_daily_limit: i32,
+    llm_used_today: i64,
     /// Each subscribed feed's own filter, by feed id. Feeds absent here are 'off'.
     feed_filters: HashMap<Uuid, FeedFilter>,
 }
@@ -161,6 +162,14 @@ async fn read_settings(state: &AppState, user_id: Uuid) -> Result<SettingsRespon
     .fetch_one(&state.db)
     .await
     .map_err(db_error)?;
+    let used_today = sqlx::query!(
+        r#"SELECT COUNT(*)::bigint AS used FROM llm_calls
+           WHERE user_id = $1 AND created_at >= date_trunc('day', now())"#,
+        user_id
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(db_error)?;
     let feeds = sqlx::query!(
         r#"SELECT feed_id AS "feed_id!", filter_mode, score_threshold, top_n
            FROM feed_subscriptions WHERE user_id = $1 AND filter_mode <> 'off'"#,
@@ -178,6 +187,7 @@ async fn read_settings(state: &AppState, user_id: Uuid) -> Result<SettingsRespon
         llm_summaries: s.llm_summaries,
         llm_allowed: s.llm_allowed,
         llm_daily_limit: s.llm_daily_limit,
+        llm_used_today: used_today.used.unwrap_or(0),
         feed_filters: feeds
             .into_iter()
             .map(|f| {

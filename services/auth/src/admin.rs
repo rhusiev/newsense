@@ -5,7 +5,7 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as BASE64};
 use rand::RngCore;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
@@ -245,6 +245,44 @@ pub async fn delete_code(
 
 pub async fn admin_check(_admin: AdminUser) -> StatusCode {
     StatusCode::OK
+}
+
+#[derive(Serialize)]
+pub struct LlmUserResponse {
+    pub id: Uuid,
+    pub username: String,
+    pub llm_allowed: bool,
+    pub llm_daily_limit: i32,
+}
+
+/// Users and their summary controls, for the admin tab.
+pub async fn list_llm_users(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> Result<Json<Vec<LlmUserResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT u.id, u.username,
+               COALESCE(s.llm_allowed, true) AS "llm_allowed!",
+               COALESCE(s.llm_daily_limit, 70) AS "llm_daily_limit!"
+        FROM users u
+        LEFT JOIN user_settings s ON s.user_id = u.id
+        ORDER BY u.username
+        "#
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(db_error)?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| LlmUserResponse {
+                id: r.id,
+                username: r.username,
+                llm_allowed: r.llm_allowed,
+                llm_daily_limit: r.llm_daily_limit,
+            })
+            .collect(),
+    ))
 }
 
 #[derive(Deserialize)]

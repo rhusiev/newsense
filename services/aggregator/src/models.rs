@@ -163,6 +163,22 @@ pub struct StorySummaryResponse {
 }
 
 #[derive(Serialize)]
+pub struct StorySummaryStatusResponse {
+    /// "ready", "pending" or "not-applicable".
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(with = "time::serde::iso8601::option")]
+    pub updated_at: Option<time::OffsetDateTime>,
+    /// Another article joined the story after the summary was made.
+    pub can_recreate: bool,
+    pub used_today: i64,
+    pub daily_limit: i32,
+}
+
+#[derive(Serialize)]
 pub struct UnreadCountResponse {
     pub unread_count: i64,
 }

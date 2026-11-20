@@ -12,7 +12,7 @@ use crate::{
         AllUnreadCountsResponse, ClusterResponse, ClusterStatusResponse, ErrorResponse,
         FeedUnreadCount, GetClustersQuery, GetItemsQuery, GetUnreadCountsQuery, ItemResponse,
         MarkAllReadRequest, MarkAllReadResponse, ReadStatusResponse, StorySummaryResponse,
-        UnreadCountResponse, UpdateItemStatusRequest,
+        StorySummaryStatusResponse, UnreadCountResponse, UpdateItemStatusRequest,
     },
     ranking,
     state::AppState,
@@ -794,6 +794,118 @@ pub async fn get_story_summary(
             }),
         )),
     }
+}
+
+/// Drop a cached summary so the worker makes a new one; its call counts daily.
+pub async fn refresh_story_summary(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+    Path(story_id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    sqlx::query!(
+        "DELETE FROM story_summaries WHERE user_id = $1 AND story_id = $2",
+        user_id,
+        story_id,
+    )
+    .execute(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Whether the reader can show a summary, is still waiting, or cannot get one.
+pub async fn get_story_summary_status(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+    Path(story_id): Path<Uuid>,
+) -> Result<Json<StorySummaryStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let row = sqlx::query!(
+        r#"
+        WITH settings AS (
+            SELECT llm_summaries, llm_allowed, llm_daily_limit
+            FROM user_settings WHERE user_id = $1
+        ),
+        story AS (
+            SELECT summary, model, updated_at FROM story_summaries
+            WHERE user_id = $1 AND story_id = $2
+        ),
+        eligible AS (
+            SELECT EXISTS (
+                SELECT 1
+                FROM items i
+                JOIN item_full_texts ft ON ft.item_id = i.id AND ft.text IS NOT NULL
+                JOIN feeds f ON f.source_id = i.source_id
+                LEFT JOIN feed_subscriptions fs
+                    ON fs.feed_id = f.id AND fs.user_id = $1
+                WHERE COALESCE(i.cluster_id, i.id) = $2
+                  AND f.full_text AND NOT f.is_public
+                  AND (f.owner_id = $1 OR fs.user_id = $1)
+            ) AS ok
+        ),
+        latest AS (
+            SELECT MAX(ft.fetched_at) AS fetched_at
+            FROM items i
+            JOIN item_full_texts ft ON ft.item_id = i.id AND ft.text IS NOT NULL
+            WHERE COALESCE(i.cluster_id, i.id) = $2
+        ),
+        usage AS (
+            SELECT COUNT(*)::bigint AS used FROM llm_calls
+            WHERE user_id = $1 AND created_at >= date_trunc('day', now())
+        )
+        SELECT
+            s.llm_summaries AS "summaries!",
+            s.llm_allowed AS "allowed!",
+            s.llm_daily_limit AS "daily_limit!",
+            (SELECT summary FROM story) AS summary,
+            (SELECT model FROM story) AS model,
+            (SELECT updated_at FROM story) AS updated_at,
+            e.ok AS "eligible!",
+            COALESCE(l.fetched_at > (SELECT updated_at FROM story), false) AS "stale!",
+            u.used AS "used!"
+        FROM settings s
+        CROSS JOIN eligible e
+        CROSS JOIN latest l
+        CROSS JOIN usage u
+        "#,
+        user_id,
+        story_id,
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    let applicable = row.summaries && row.allowed && row.eligible;
+    let ready = row.summary.is_some();
+    Ok(Json(StorySummaryStatusResponse {
+        status: if !applicable {
+            "not-applicable"
+        } else if ready {
+            "ready"
+        } else {
+            "pending"
+        }
+        .to_string(),
+        summary: row.summary,
+        model: row.model,
+        updated_at: row.updated_at,
+        can_recreate: applicable && ready && row.stale,
+        used_today: row.used,
+        daily_limit: row.daily_limit,
+    }))
 }
 
 pub async fn update_cluster_status(    State(state): State<AppState>,

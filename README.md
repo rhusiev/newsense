@@ -106,6 +106,12 @@ A user may supply their own endpoint and key with `PUT /settings/llm-key`
 `GET /settings/llm-key` shows only whether it is set, the URL and the model.
 `DELETE /settings/llm-key` removes it.
 
+`GET /clusters/{id}/summary/status` returns `ready`, `pending` or
+`not-applicable`, the cached summary when ready, whether a newer article makes
+it stale, and today's call count and limit. `POST /clusters/{id}/summary/refresh`
+drops the cached summary so the worker makes a new one. `GET /admin/users/llm`
+lists each user's switch and limit for the admin tab.
+
 For OpenRouter, set `LLM_BASE_URL=https://openrouter.ai/api/v1`,
 `LLM_MODEL=z-ai/glm-5.3-flash`, and optionally
 `LLM_PROVIDER_ROUTING='{"data_collection":"deny","zdr":true}'` to keep full text
