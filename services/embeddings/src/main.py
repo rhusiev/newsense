@@ -148,7 +148,7 @@ async def startup():
     logger.info("Model loaded")
 
     if not LLM_MODEL:
-        logger.info("LLM summaries off: LLM_MODEL is empty")
+        logger.info("No instance LLM model; only users with their own key get summaries")
 
     logger.info("Connecting to database...")
     db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)

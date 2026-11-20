@@ -6,6 +6,12 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
+use aes_gcm::{
+    Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
+};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use rand::{RngCore, rng};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -66,6 +72,64 @@ fn db_error(e: sqlx::Error) -> ApiError {
             error: e.to_string(),
         }),
     )
+}
+
+fn bad_request(error: &str) -> ApiError {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+            error: error.into(),
+        }),
+    )
+}
+
+fn server_error(error: String) -> ApiError {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse { error }),
+    )
+}
+
+const LLM_KEY_BYTES: usize = 32;
+const LLM_NONCE_BYTES: usize = 12;
+
+fn encryption_key() -> Result<[u8; LLM_KEY_BYTES], ApiError> {
+    let raw = std::env::var("LLM_KEY_ENCRYPTION_KEY")
+        .map_err(|_| server_error("LLM_KEY_ENCRYPTION_KEY is not set".into()))?;
+    let bytes = BASE64
+        .decode(raw)
+        .map_err(|e| server_error(format!("LLM_KEY_ENCRYPTION_KEY is not base64: {e}")))?;
+    bytes.try_into().map_err(|_| {
+        server_error(format!(
+            "LLM_KEY_ENCRYPTION_KEY must be {LLM_KEY_BYTES} bytes"
+        ))
+    })
+}
+
+fn encrypt_with(
+    key: &[u8; LLM_KEY_BYTES],
+    plain: &str,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| e.to_string())?;
+    let mut nonce = [0u8; LLM_NONCE_BYTES];
+    rng().fill_bytes(&mut nonce);
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), plain.as_bytes())
+        .map_err(|e| e.to_string())?;
+    Ok((ciphertext, nonce.to_vec()))
+}
+
+#[cfg(test)]
+fn decrypt_with(
+    key: &[u8; LLM_KEY_BYTES],
+    ciphertext: &[u8],
+    nonce: &[u8],
+) -> Result<String, String> {
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| e.to_string())?;
+    let plain = cipher
+        .decrypt(Nonce::from_slice(nonce), ciphertext)
+        .map_err(|e| e.to_string())?;
+    String::from_utf8(plain).map_err(|e| e.to_string())
 }
 
 pub async fn get_settings(
@@ -190,4 +254,122 @@ pub async fn set_feed_filter(
         ));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize)]
+pub struct LlmKeyResponse {
+    pub configured: bool,
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct SetLlmKeyRequest {
+    pub base_url: String,
+    pub model: String,
+    pub api_key: String,
+}
+
+/// Whether the user has their own model, and which one. Never the key.
+pub async fn get_llm_key(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+) -> Result<Json<LlmKeyResponse>, ApiError> {
+    let row = sqlx::query!(
+        "SELECT base_url, model FROM user_llm_keys WHERE user_id = $1",
+        user_id
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(db_error)?;
+
+    Ok(Json(match row {
+        Some(row) => LlmKeyResponse {
+            configured: true,
+            base_url: Some(row.base_url),
+            model: Some(row.model),
+        },
+        None => LlmKeyResponse {
+            configured: false,
+            base_url: None,
+            model: None,
+        },
+    }))
+}
+
+/// Stores the user's own endpoint and key. An existing key stays until replaced.
+pub async fn set_llm_key(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+    Json(payload): Json<SetLlmKeyRequest>,
+) -> Result<Json<LlmKeyResponse>, ApiError> {
+    let base_url = payload.base_url.trim();
+    let model = payload.model.trim();
+    let api_key = payload.api_key.trim();
+    if !(base_url.starts_with("http://") || base_url.starts_with("https://"))
+        || model.is_empty()
+        || api_key.is_empty()
+    {
+        return Err(bad_request(
+            "base_url must be http or https, and model and api_key must not be empty",
+        ));
+    }
+
+    let key = encryption_key()?;
+    let (ciphertext, nonce) =
+        encrypt_with(&key, api_key).map_err(|e| server_error(format!("could not encrypt key: {e}")))?;
+    sqlx::query!(
+        r#"
+        INSERT INTO user_llm_keys
+            (user_id, base_url, model, key_ciphertext, key_nonce)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (user_id) DO UPDATE SET
+            base_url = EXCLUDED.base_url,
+            model = EXCLUDED.model,
+            key_ciphertext = EXCLUDED.key_ciphertext,
+            key_nonce = EXCLUDED.key_nonce,
+            updated_at = CURRENT_TIMESTAMP
+        "#,
+        user_id,
+        base_url,
+        model,
+        ciphertext,
+        nonce
+    )
+    .execute(&state.db)
+    .await
+    .map_err(db_error)?;
+
+    Ok(Json(LlmKeyResponse {
+        configured: true,
+        base_url: Some(base_url.to_string()),
+        model: Some(model.to_string()),
+    }))
+}
+
+pub async fn delete_llm_key(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    sqlx::query!("DELETE FROM user_llm_keys WHERE user_id = $1", user_id)
+        .execute(&state.db)
+        .await
+        .map_err(db_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decrypt_with, encrypt_with};
+
+    #[test]
+    fn key_round_trip() {
+        let key = [7u8; 32];
+        let (ciphertext, nonce) = encrypt_with(&key, "secret-key").unwrap();
+        assert_eq!(
+            decrypt_with(&key, &ciphertext, &nonce).unwrap(),
+            "secret-key"
+        );
+        assert_ne!(ciphertext, b"secret-key");
+    }
 }

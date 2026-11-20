@@ -6,9 +6,12 @@ read, and it settled for a few hours. Results are cached per user and story;
 failed attempts back off and count toward the daily limit.
 """
 
+import base64
 import hashlib
 import logging
+import os
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import httpx
 
 from .config import (
@@ -77,6 +80,11 @@ CALLS_TODAY = """
     WHERE user_id = $1 AND created_at >= date_trunc('day', now())
 """
 
+USER_LLM = """
+    SELECT base_url, model, key_ciphertext, key_nonce
+    FROM user_llm_keys WHERE user_id = $1
+"""
+
 SAVE = """
     INSERT INTO story_summaries
         (user_id, story_id, summary, error, attempts, source_hash, model)
@@ -112,8 +120,27 @@ SYSTEM = (
 )
 
 
-def _configured() -> bool:
-    return bool(LLM_BASE_URL and LLM_API_KEY and LLM_MODEL)
+def _decrypt_key(ciphertext: bytes, nonce: bytes) -> str:
+    key = base64.b64decode(os.getenv("LLM_KEY_ENCRYPTION_KEY", ""))
+    return AESGCM(key).decrypt(bytes(nonce), bytes(ciphertext), None).decode()
+
+
+async def _llm_config(conn, user_id):
+    """The user's own endpoint, or the instance one. None when neither exists."""
+    row = await conn.fetchrow(USER_LLM, user_id)
+    if row:
+        try:
+            return (
+                row["base_url"],
+                row["model"],
+                _decrypt_key(row["key_ciphertext"], row["key_nonce"]),
+            )
+        except Exception as e:
+            logger.warning(f"Could not decrypt the LLM key for user {user_id}: {e}")
+            return None
+    if LLM_BASE_URL and LLM_API_KEY and LLM_MODEL:
+        return (LLM_BASE_URL, LLM_MODEL, LLM_API_KEY)
+    return None
 
 
 def _prepare(rows) -> tuple[str, str, str]:
@@ -127,10 +154,11 @@ def _prepare(rows) -> tuple[str, str, str]:
     return title, body, hashlib.sha256(source.encode()).hexdigest()
 
 
-async def _call_model(title: str, body: str) -> str:
-    url = f"{LLM_BASE_URL.rstrip('/')}/chat/completions"
+async def _call_model(config, title: str, body: str) -> str:
+    base_url, model, api_key = config
+    url = f"{base_url.rstrip('/')}/chat/completions"
     payload = {
-        "model": LLM_MODEL,
+        "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": f"Story: {title}\n\n{body}"},
@@ -141,7 +169,7 @@ async def _call_model(title: str, body: str) -> str:
     async with httpx.AsyncClient(timeout=LLM_REQUEST_TIMEOUT_S) as client:
         response = await client.post(
             url,
-            headers={"Authorization": f"Bearer {LLM_API_KEY}"},
+            headers={"Authorization": f"Bearer {api_key}"},
             json=payload,
         )
         response.raise_for_status()
@@ -157,9 +185,6 @@ async def _call_model(title: str, body: str) -> str:
 
 async def update_summaries(conn) -> int:
     """Summarizes one batch of pending stories. Returns the number stored."""
-    if not _configured():
-        return 0
-
     candidates = await conn.fetch(
         CANDIDATES,
         LLM_SUMMARY_MAX_ATTEMPTS,
@@ -171,6 +196,9 @@ async def update_summaries(conn) -> int:
 
     for row in candidates:
         user_id, story_id = row["user_id"], row["story_id"]
+        config = await _llm_config(conn, user_id)
+        if not config:
+            continue
         if user_id not in calls:
             calls[user_id] = await conn.fetchval(CALLS_TODAY, user_id)
         if calls[user_id] >= row["llm_daily_limit"]:
@@ -182,20 +210,20 @@ async def update_summaries(conn) -> int:
         title, body, source_hash = _prepare(texts)
 
         try:
-            summary = await _call_model(title, body)
+            summary = await _call_model(config, title, body)
         except Exception as e:
             logger.warning(f"Summary failed for story {story_id}: {e}")
             async with conn.transaction():
                 await conn.execute(FAIL, user_id, story_id, str(e)[:1000])
                 await conn.execute(
-                    RECORD_CALL, user_id, story_id, LLM_MODEL, False
+                    RECORD_CALL, user_id, story_id, config[1], False
                 )
             calls[user_id] += 1
             continue
 
         async with conn.transaction():
-            await conn.execute(SAVE, user_id, story_id, summary, source_hash, LLM_MODEL)
-            await conn.execute(RECORD_CALL, user_id, story_id, LLM_MODEL, True)
+            await conn.execute(SAVE, user_id, story_id, summary, source_hash, config[1])
+            await conn.execute(RECORD_CALL, user_id, story_id, config[1], True)
         calls[user_id] += 1
         stored += 1
 

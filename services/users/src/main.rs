@@ -225,6 +225,12 @@ async fn main() {
             "/settings",
             get(settings::get_settings).put(settings::update_settings),
         )
+        .route(
+            "/settings/llm-key",
+            get(settings::get_llm_key)
+                .put(settings::set_llm_key)
+                .delete(settings::delete_llm_key),
+        )
         .layer(session_layer)
         .layer(cors)
         .with_state(app_state);

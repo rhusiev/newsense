@@ -94,6 +94,12 @@ The daily limit is 70 per user; an admin can change it with
 `PUT /admin/users/{id}/llm` and `{"daily_limit": 100}`. Users opt in and out
 with `llm_summaries` in `PUT /settings`.
 
+A user may supply their own endpoint and key with `PUT /settings/llm-key`
+(`{"base_url", "model", "api_key"}`). The key is encrypted with
+`LLM_KEY_ENCRYPTION_KEY` (32 bytes, base64) and is never returned;
+`GET /settings/llm-key` shows only whether it is set, the URL and the model.
+`DELETE /settings/llm-key` removes it.
+
 TODO:
 - no volume mounts for prod
 - reorder

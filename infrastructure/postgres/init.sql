@@ -231,3 +231,13 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 CREATE INDEX IF NOT EXISTS idx_llm_calls_user_day ON llm_calls(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_story_summaries_pending
     ON story_summaries(updated_at) WHERE summary IS NULL;
+
+-- A user's own model endpoint and key, encrypted at rest.
+CREATE TABLE IF NOT EXISTS user_llm_keys (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    base_url TEXT NOT NULL,
+    model TEXT NOT NULL,
+    key_ciphertext BYTEA NOT NULL,
+    key_nonce BYTEA NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
