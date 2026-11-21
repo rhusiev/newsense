@@ -1,4 +1,4 @@
-use axum::{Router, routing::{delete, get, post}};
+use axum::{Router, routing::{delete, get, post, put}};
 use crate::{state::AppState, handlers, admin};
 
 pub fn routes() -> Router<AppState> {
@@ -15,4 +15,6 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/codes/count", get(admin::count_codes))
         .route("/admin/codes/{name}", delete(admin::delete_code))
         .route("/admin/codes/{name}", axum::routing::patch(admin::update_code))
+        .route("/admin/users/llm", get(admin::list_llm_users))
+        .route("/admin/users/{id}/llm", put(admin::set_user_llm))
 }

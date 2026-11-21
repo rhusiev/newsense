@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE feeds\n        SET\n            title = COALESCE($1, title),\n            description = COALESCE($2, description),\n            is_public = COALESCE($3, is_public),\n            full_text = CASE WHEN COALESCE($3, is_public) THEN false\n                             ELSE COALESCE($5, full_text) END\n        WHERE id = $4\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Text",
+        "Bool",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aead44146a1768b4c12ff53c3b0b925a011ed7596145c4c9c242c877270f75a6"
+}

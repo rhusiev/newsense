@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO item_reads (user_id, item_id, is_read, liked, marked_at)\n        SELECT $1, i.id, true, NULL::REAL, CURRENT_TIMESTAMP\n        FROM items i\n        INNER JOIN feeds f ON i.source_id = f.source_id\n        WHERE f.id = $2 AND i.published_at >= $3\n          AND ($4::TIMESTAMPTZ IS NULL OR i.published_at < $4)\n        ON CONFLICT (user_id, item_id)\n        DO UPDATE SET is_read = true, marked_at = CURRENT_TIMESTAMP\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4bb87e1e3bc2150489e4ade45f850062e5d1750374a8bba722855d6679b161ce"
+}

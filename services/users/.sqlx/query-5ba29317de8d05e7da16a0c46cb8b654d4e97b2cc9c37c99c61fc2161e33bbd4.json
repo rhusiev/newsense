@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE feed_subscriptions SET filter_mode = $3, score_threshold = $4, top_n = $5\n           WHERE user_id = $1 AND feed_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Float4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5ba29317de8d05e7da16a0c46cb8b654d4e97b2cc9c37c99c61fc2161e33bbd4"
+}

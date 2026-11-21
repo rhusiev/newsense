@@ -80,13 +80,14 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       WEB_URL: https://${WEB_DOMAIN}
       COOKIE_DOMAIN: ${COOKIE_DOMAIN}
+      LLM_KEY_ENCRYPTION_KEY: ${LLM_KEY_ENCRYPTION_KEY:-}
     depends_on:
       db:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.users.entrypoints=web"
-      - "traefik.http.routers.users.rule=Host(`${API_DOMAIN}`) && PathPrefix(`/feeds`)"
+      - "traefik.http.routers.users.rule=Host(`${API_DOMAIN}`) && (PathPrefix(`/feeds`) || PathPrefix(`/settings`))"
       - "traefik.http.services.users.loadbalancer.server.port=3001"
     volumes:
       - ./services/users:/app
@@ -144,6 +145,26 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       VALKEY_URL: redis://valkey:6379
       RECONCILIATION_INTERVAL_MINUTES: 10
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_KEY_ENCRYPTION_KEY: ${LLM_KEY_ENCRYPTION_KEY:-}
+      LLM_PROVIDER_ROUTING: ${LLM_PROVIDER_ROUTING:-}
+      LLM_REASONING: ${LLM_REASONING:-}
+      LLM_SUMMARY_MAX_TOKENS: ${LLM_SUMMARY_MAX_TOKENS:-700}
+      LLM_SUMMARY_INTERVAL_MINUTES: ${LLM_SUMMARY_INTERVAL_MINUTES:-5}
+      THREAD_LLM_ENABLED: ${THREAD_LLM_ENABLED:-1}
+      THREAD_LLM_THRESHOLD: ${THREAD_LLM_THRESHOLD:-0.7}
+      THREAD_LLM_MAX_CALLS: ${THREAD_LLM_MAX_CALLS:-2000}
+      THREAD_LLM_DAILY_CALLS: ${THREAD_LLM_DAILY_CALLS:-1000}
+      THREAD_LLM_MAX_CHARS: ${THREAD_LLM_MAX_CHARS:-700}
+      THREAD_LLM_CONCURRENCY: ${THREAD_LLM_CONCURRENCY:-8}
+      THREAD_TWO_HOP: ${THREAD_TWO_HOP:-0}
+      THREAD_PAIR_MODEL: ${THREAD_PAIR_MODEL:-}
+      THREAD_PAIR_THRESHOLD: ${THREAD_PAIR_THRESHOLD:-0.5}
+      THREAD_PAIR_MAX_LEN: ${THREAD_PAIR_MAX_LEN:-128}
+      THREAD_PAIR_BATCH: ${THREAD_PAIR_BATCH:-64}
+      THREAD_ALTERNATIVE_MIN: ${THREAD_ALTERNATIVE_MIN:-0.35}
     depends_on:
       db:
         condition: service_healthy

@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT feed_id AS \"feed_id!\", filter_mode, score_threshold, top_n\n           FROM feed_subscriptions WHERE user_id = $1 AND filter_mode <> 'off'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "feed_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "filter_mode",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "score_threshold",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 3,
+        "name": "top_n",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "e6f613e7f7f7eb253872d4d98b766a4c1322fc16628b020ee7d9f5533ff26137"
+}

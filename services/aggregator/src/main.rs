@@ -1,7 +1,9 @@
 mod state;
 mod auth;
+mod full_text;
 mod handlers;
 mod models;
+mod ranking;
 mod router;
 mod utils;
 

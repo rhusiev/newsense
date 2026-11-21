@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH target_items AS (\n            SELECT i.id\n            FROM items i\n            JOIN sources s ON i.source_id = s.id\n            JOIN feeds f ON f.source_id = s.id\n            LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $1\n            WHERE (i.cluster_id = $2 OR (i.cluster_id IS NULL AND i.id = $2))\n              AND (f.is_public OR f.owner_id = $1 OR fs.user_id = $1)\n        )\n        INSERT INTO item_reads (user_id, item_id, is_read, liked, marked_at)\n        SELECT $1, id, COALESCE($3::BOOLEAN, true), $4::REAL, CURRENT_TIMESTAMP\n        FROM target_items\n        ON CONFLICT (user_id, item_id)\n        DO UPDATE SET\n            is_read = COALESCE($3::BOOLEAN, item_reads.is_read),\n            liked = CASE WHEN $5::BOOLEAN THEN $4::REAL ELSE item_reads.liked END,\n            marked_at = CURRENT_TIMESTAMP\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool",
+        "Float4",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6b3c1c141a6df8c874ca9ebafb4835dc1171a25f95b85de868b53b3c22be5260"
+}

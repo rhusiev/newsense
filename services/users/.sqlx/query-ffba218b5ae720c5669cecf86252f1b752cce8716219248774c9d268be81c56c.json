@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT all_articles_filter, score_threshold, top_per_day, use_clusters, reader_layout,\n                  llm_summaries, llm_allowed, llm_daily_limit\n           FROM user_settings WHERE user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "all_articles_filter",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "score_threshold",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 2,
+        "name": "top_per_day",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "use_clusters",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "reader_layout",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "llm_summaries",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "llm_allowed",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "llm_daily_limit",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ffba218b5ae720c5669cecf86252f1b752cce8716219248774c9d268be81c56c"
+}

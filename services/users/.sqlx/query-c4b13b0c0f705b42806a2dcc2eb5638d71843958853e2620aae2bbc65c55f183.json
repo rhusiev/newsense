@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO user_llm_keys\n            (user_id, base_url, model, key_ciphertext, key_nonce)\n        VALUES ($1, $2, $3, $4, $5)\n        ON CONFLICT (user_id) DO UPDATE SET\n            base_url = EXCLUDED.base_url,\n            model = EXCLUDED.model,\n            key_ciphertext = EXCLUDED.key_ciphertext,\n            key_nonce = EXCLUDED.key_nonce,\n            updated_at = CURRENT_TIMESTAMP\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Bytea",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c4b13b0c0f705b42806a2dcc2eb5638d71843958853e2620aae2bbc65c55f183"
+}

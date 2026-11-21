@@ -15,7 +15,12 @@ from embeddings.config import (
     BATCH_SIZE,
     RECONCILIATION_INTERVAL_MINUTES,
     TRAINING_INTERVAL_MINUTES,
+    THREADS_INTERVAL_MINUTES,
+    LLM_MODEL,
+    LLM_SUMMARY_INTERVAL_MINUTES,
 )
+from embeddings.threads import update_threads
+from embeddings.summaries import update_summaries
 from embeddings.clustering import process_item_logic
 from embeddings.utils import encode_texts
 from embeddings.training import train_user_preference_model, get_users_needing_training
@@ -108,6 +113,30 @@ async def training_worker():
             logger.error(f"Training worker error: {e}")
 
 
+async def threads_worker():
+    interval_seconds = THREADS_INTERVAL_MINUTES * 60
+    while not shutdown_event.is_set():
+        try:
+            async with db_pool.acquire() as conn:
+                await update_threads(conn)
+        except Exception as e:
+            logger.error(f"Threads worker error: {e}")
+        await asyncio.sleep(interval_seconds)
+
+
+async def summaries_worker():
+    interval_seconds = LLM_SUMMARY_INTERVAL_MINUTES * 60
+    while not shutdown_event.is_set():
+        try:
+            async with db_pool.acquire() as conn:
+                stored = await update_summaries(conn)
+                if stored:
+                    logger.info(f"Stored {stored} story summaries")
+        except Exception as e:
+            logger.error(f"Summaries worker error: {e}")
+        await asyncio.sleep(interval_seconds)
+
+
 async def startup():
     global db_pool, valkey_client, model, tokenizer
 
@@ -117,6 +146,9 @@ async def startup():
     model.eval()
 
     logger.info("Model loaded")
+
+    if not LLM_MODEL:
+        logger.info("No instance LLM model; only users with their own key get summaries")
 
     logger.info("Connecting to database...")
     db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
@@ -147,9 +179,17 @@ async def main():
     queue_task = asyncio.create_task(process_queue_consumer())
     reconciliation_task = asyncio.create_task(reconciliation_worker())
     training_task = asyncio.create_task(training_worker())
+    threads_task = asyncio.create_task(threads_worker())
+    summaries_task = asyncio.create_task(summaries_worker())
 
     try:
-        await asyncio.gather(queue_task, reconciliation_task, training_task)
+        await asyncio.gather(
+            queue_task,
+            reconciliation_task,
+            training_task,
+            threads_task,
+            summaries_task,
+        )
     except KeyboardInterrupt:
         logger.info("Received shutdown signal")
     finally:
