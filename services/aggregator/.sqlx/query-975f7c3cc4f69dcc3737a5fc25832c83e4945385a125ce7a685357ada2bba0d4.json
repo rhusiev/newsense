@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH cluster_state AS (\n            SELECT c.id, c.thread_id,\n                   MIN(i.published_at) AS first_date,\n                   MAX(i.published_at) AS last_date,\n                   BOOL_OR(COALESCE(ir.is_read, false)) AS is_read,\n                   (array_agg(i.title ORDER BY i.published_at))[1] AS first_title\n            FROM clusters c\n            JOIN items i ON i.cluster_id = c.id\n            JOIN feeds f ON f.source_id = i.source_id\n            JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $1\n            LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $1\n            WHERE c.thread_id IS NOT NULL\n            GROUP BY c.id, c.thread_id\n        )\n        SELECT thread_id as \"id!\",\n               (array_agg(first_title ORDER BY first_date))[1] as \"title!\",\n               MIN(first_date) as \"first_date!\",\n               MAX(last_date) as \"last_date!\",\n               COUNT(*)::bigint as \"story_count!\",\n               COUNT(*) FILTER (WHERE NOT is_read)::bigint as \"unread_count!\"\n        FROM cluster_state\n        GROUP BY thread_id\n        ORDER BY MAX(last_date) DESC\n        LIMIT 50\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "first_date!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "last_date!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "story_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "unread_count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "975f7c3cc4f69dcc3737a5fc25832c83e4945385a125ce7a685357ada2bba0d4"
+}

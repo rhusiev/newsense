@@ -12,8 +12,8 @@ use crate::{
         AllUnreadCountsResponse, ClusterResponse, ClusterStatusResponse, ErrorResponse,
         FeedUnreadCount, GetClustersQuery, GetItemsQuery, GetUnreadCountsQuery, ItemResponse,
         MarkAllReadRequest, MarkAllReadResponse, ReadStatusResponse, StorySummaryResponse,
-        StorySummaryStatusResponse, ThreadResponse, ThreadStoryResponse, UnreadCountResponse,
-        UpdateItemStatusRequest,
+        StorySummaryStatusResponse, ThreadBriefResponse, ThreadResponse, ThreadStoryResponse,
+        UnreadCountResponse, UpdateItemStatusRequest,
     },
     ranking,
     state::AppState,
@@ -754,6 +754,52 @@ pub async fn get_clusters(
     )
     .await;
     Ok(Json(clusters))
+}
+
+/// Storylines visible to the viewer, newest first.
+pub async fn list_threads(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+) -> Result<Json<Vec<ThreadBriefResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let threads = sqlx::query_as!(
+        ThreadBriefResponse,
+        r#"
+        WITH cluster_state AS (
+            SELECT c.id, c.thread_id,
+                   MIN(i.published_at) AS first_date,
+                   MAX(i.published_at) AS last_date,
+                   BOOL_OR(COALESCE(ir.is_read, false)) AS is_read,
+                   (array_agg(i.title ORDER BY i.published_at))[1] AS first_title
+            FROM clusters c
+            JOIN items i ON i.cluster_id = c.id
+            JOIN feeds f ON f.source_id = i.source_id
+            JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $1
+            LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $1
+            WHERE c.thread_id IS NOT NULL
+            GROUP BY c.id, c.thread_id
+        )
+        SELECT thread_id as "id!",
+               (array_agg(first_title ORDER BY first_date))[1] as "title!",
+               MIN(first_date) as "first_date!",
+               MAX(last_date) as "last_date!",
+               COUNT(*)::bigint as "story_count!",
+               COUNT(*) FILTER (WHERE NOT is_read)::bigint as "unread_count!"
+        FROM cluster_state
+        GROUP BY thread_id
+        ORDER BY MAX(last_date) DESC
+        LIMIT 50
+        "#,
+        user_id,
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )
+    })?;
+    Ok(Json(threads))
 }
 
 /// The timeline of the thread containing one story.
