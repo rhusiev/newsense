@@ -57,7 +57,9 @@ CREATE TABLE IF NOT EXISTS clusters (
     last_updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     -- NULL thread_id with threads_checked_at set: a story with no thread yet.
     thread_id UUID REFERENCES threads(id) ON DELETE SET NULL,
-    threads_checked_at TIMESTAMP WITH TIME ZONE
+    threads_checked_at TIMESTAMP WITH TIME ZONE,
+    thread_confidence REAL,
+    thread_alternative_id UUID REFERENCES threads(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS items (

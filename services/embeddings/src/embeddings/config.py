@@ -31,9 +31,19 @@ MIN_TRAINING_SAMPLES = 5
 
 # Story threads: Leiden communities in a kNN graph of full-text embeddings.
 # Tuned on two reviewed weeks: pairwise F1 about 0.54 on each.
-THREAD_KNN = 20
+THREAD_KNN = int(os.getenv("THREAD_KNN", "20"))
 THREAD_EMBEDDING_MIN = 0.86
 THREAD_RESOLUTION = 40.0
+# Add neighbors of neighbours so a story chain is not cut by the k limit.
+THREAD_TWO_HOP = os.getenv("THREAD_TWO_HOP", "0").lower() in ("1", "true", "yes")
+# Optional local pair scorer: a quantized ONNX cross-encoder plus its tokenizer.
+THREAD_PAIR_MODEL = os.getenv("THREAD_PAIR_MODEL", "")
+THREAD_PAIR_THRESHOLD = float(os.getenv("THREAD_PAIR_THRESHOLD", "0.5"))
+THREAD_PAIR_MAX_LEN = int(os.getenv("THREAD_PAIR_MAX_LEN", "128"))
+# Inference is batched; a single all-pairs call can allocate gigabytes.
+THREAD_PAIR_BATCH = int(os.getenv("THREAD_PAIR_BATCH", "64"))
+# A weaker match is shown as an alternative thread rather than joined.
+THREAD_ALTERNATIVE_MIN = float(os.getenv("THREAD_ALTERNATIVE_MIN", "0.35"))
 # Stories from this many days are grouped together.
 THREAD_VOCABULARY_DAYS = 28
 # A story is threaded once it is this old, so most of its articles have joined it.

@@ -78,6 +78,14 @@ Story threads group settled stories with Leiden on a kNN graph of the full-text
 cluster and preference vectors when it embeds an article. Existing items need a
 backfill before threads regroup them.
 
+Threads are soft. Each cluster stores `thread_confidence` and one
+`thread_alternative_id`. A story with no confident pair stays a singleton. Set
+`THREAD_PAIR_MODEL` to a directory holding a quantized ONNX cross-encoder and
+tokenizer to confirm cosine candidates locally; low-confidence pairs become
+alternatives instead of joins. `THREAD_TWO_HOP=1` adds neighbors of neighbors
+so chains are not cut by the k limit. Inference is batched by
+`THREAD_PAIR_BATCH` (default 64); raising it far past 64 can allocate gigabytes.
+
 `init.sql` only runs on an empty volume, so an existing deployment needs the
 files in `infrastructure/postgres/migrations/` applied by hand:
 
