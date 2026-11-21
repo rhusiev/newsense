@@ -13,11 +13,15 @@ import igraph as ig
 import leidenalg
 import numpy as np
 
-from . import pair_scores
+from . import pair_scores, thread_verdicts
 from .config import (
+    LLM_API_KEY,
+    LLM_BASE_URL,
+    LLM_MODEL,
     THREAD_ALTERNATIVE_MIN,
     THREAD_EMBEDDING_MIN,
     THREAD_KNN,
+    THREAD_LLM_ENABLED,
     THREAD_RESOLUTION,
     THREAD_SETTLE_HOURS,
     THREAD_TWO_HOP,
@@ -31,50 +35,65 @@ def _vector(text: str) -> np.ndarray:
     return np.array([float(x) for x in text.strip("[]").split(",")], dtype=np.float32)
 
 
-def _candidates(sim: np.ndarray) -> dict[tuple[int, int], float]:
+def _candidates(sim: np.ndarray, min_sim: float) -> dict[tuple[int, int], float]:
     """Top-k cosine neighbors, optionally with neighbors of neighbors."""
     n = sim.shape[0]
     order = np.argsort(-sim, axis=1)
     edges: dict[tuple[int, int], float] = {}
     for i in range(n):
-        for j in order[i, 1 : THREAD_KNN + 1]:
+        for j in order[i, : THREAD_KNN + 1]:
             j = int(j)
-            if sim[i, j] < THREAD_EMBEDDING_MIN:
+            if j == i or sim[i, j] < min_sim:
                 continue
             a, b = (i, j) if i < j else (j, i)
             edges[(a, b)] = max(edges.get((a, b), 0.0), float(sim[i, j]))
     if THREAD_TWO_HOP:
         for i in range(n):
-            for j in order[i, 1:6]:
+            for j in order[i, :6]:
                 j = int(j)
-                if sim[i, j] < THREAD_EMBEDDING_MIN:
+                if j == i or sim[i, j] < min_sim:
                     continue
-                for k in order[j, 1:6]:
+                for k in order[j, :6]:
                     k = int(k)
-                    if k == i or sim[j, k] < THREAD_EMBEDDING_MIN + 0.04:
+                    if k in (i, j) or sim[j, k] < min_sim + 0.04:
                         continue
                     a, b = (i, k) if i < k else (k, i)
                     edges[(a, b)] = max(edges.get((a, b), 0.0), float(sim[j, k]) * 0.9)
     return edges
 
 
-def group(vectors: np.ndarray, texts: list[str] | None = None):
+def group(
+    vectors: np.ndarray,
+    texts: list[tuple[str, str]] | None = None,
+    verdicts: dict[tuple[int, int], float] | None = None,
+):
     """Return labels, pair confidence and alternative cluster indices.
 
-    `vectors` rows must be L2-normalized. When a pair scorer is configured,
-    cosine candidates are confirmed by it and low-confidence pairs are left
-    unjoined. `texts[i]` must match `vectors[i]`.
+    `vectors` rows must be L2-normalized. When verdicts are provided, they
+    decide which cosine candidates join. Otherwise an optional local pair
+    scorer can confirm them; without either, cosine alone joins stories.
     """
     n = len(vectors)
     if n < 2:
         return np.zeros(n, dtype=int), {}, {}
     sim = vectors @ vectors.T
-    edges = _candidates(sim)
+    edges = _candidates(sim, 0.0 if verdicts is not None else THREAD_EMBEDDING_MIN)
 
     scored = {}
-    if pair_scores.enabled() and texts is not None:
+    if verdicts is not None:
+        accepted = {
+            key: float(prob) for key, prob in verdicts.items()
+            if key in edges and thread_verdicts.accept(float(prob))
+        }
+        scored = {
+            key: float(prob) for key, prob in verdicts.items()
+            if key in edges and not thread_verdicts.accept(float(prob))
+        }
+        edges = accepted
+    elif pair_scores.enabled() and texts is not None:
         keys = sorted(edges)
-        probs = pair_scores.score([texts[a] for a, _ in keys], [texts[b] for _, b in keys])
+        probs = pair_scores.score([texts[a][0] for a, _ in keys],
+                                  [texts[b][0] for _, b in keys])
         accepted = {}
         for (a, b), p in zip(keys, probs):
             if pair_scores.accept(float(p)):
@@ -119,9 +138,11 @@ async def _load_stories(conn):
         """
         SELECT c.id, c.thread_id, MIN(i.published_at) AS started_at,
                string_agg(i.title, ' ') AS titles,
+               COALESCE(string_agg(LEFT(ft.text, 700), ' '), '') AS body,
                array_agg(i.story_embedding::text) AS embeddings
         FROM clusters c
         JOIN items i ON i.cluster_id = c.id
+        LEFT JOIN item_full_texts ft ON ft.item_id = i.id
         WHERE c.created_at > now() - interval '{days} days'
           AND i.story_embedding IS NOT NULL
         GROUP BY c.id, c.thread_id
@@ -137,7 +158,7 @@ async def _load_stories(conn):
         items /= np.linalg.norm(items, axis=1, keepdims=True) + 1e-9
         mean = items.mean(0)
         vectors.append(mean / (np.linalg.norm(mean) + 1e-9))
-    texts = [row["titles"] or "" for row in rows]
+    texts = [(row["titles"] or "", row["body"] or "") for row in rows]
     return rows, np.stack(vectors) if vectors else np.zeros((0, 0), dtype=np.float32), texts
 
 
@@ -146,7 +167,22 @@ async def update_threads(conn) -> int:
     rows, vectors, texts = await _load_stories(conn)
     if len(rows) < 2:
         return 0
-    labels, confidence, alternatives = group(vectors, texts)
+
+    verdicts: dict[tuple[int, int], float] | None = None
+    if THREAD_LLM_ENABLED and LLM_BASE_URL and LLM_API_KEY and LLM_MODEL:
+        sim = vectors @ vectors.T
+        ids = [row["id"] for row in rows]
+        texts_by_id = {row["id"]: text for row, text in zip(rows, texts)}
+        pairs = []
+        index_of = {}
+        for (i, j) in _candidates(sim, 0.0):
+            a, b = ids[i], ids[j]
+            pair = (a, b) if a < b else (b, a)
+            pairs.append(pair)
+            index_of[pair] = (i, j) if i < j else (j, i)
+        scored = await thread_verdicts.score_pairs(conn, pairs, texts_by_id)
+        verdicts = {index_of[pair]: prob for pair, prob in scored.items()}
+    labels, confidence, alternatives = group(vectors, texts, verdicts)
 
     members: dict[int, list[int]] = {}
     for i, label in enumerate(labels):
