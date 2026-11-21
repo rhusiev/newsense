@@ -155,6 +155,24 @@ pub struct ClusterStatusResponse {
 }
 
 #[derive(Serialize)]
+pub struct ThreadStoryResponse {
+    pub id: Uuid,
+    pub title: String,
+    #[serde(with = "time::serde::iso8601")]
+    pub sort_date: time::OffsetDateTime,
+    pub item_count: i64,
+    pub is_read: bool,
+    pub liked: Option<f32>,
+}
+
+#[derive(Serialize)]
+pub struct ThreadResponse {
+    pub id: Uuid,
+    pub title: String,
+    pub stories: Vec<ThreadStoryResponse>,
+}
+
+#[derive(Serialize)]
 pub struct StorySummaryResponse {
     pub summary: String,
     pub model: Option<String>,

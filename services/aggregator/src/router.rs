@@ -8,7 +8,7 @@ use crate::{
     handlers::{
         get_all_items, get_all_unread_count, get_all_unread_counts, get_cluster_unread_count,
         get_clusters, get_feed_cluster_unread_count, get_feed_clusters, get_feed_items,
-        get_feed_unread_count, get_story_summary_status, get_story_summary,
+        get_feed_unread_count, get_story_summary_status, get_story_summary, get_story_thread,
         mark_all_items_read, mark_feed_clusters_read, refresh_story_summary,
         mark_feed_items_read, update_cluster_status, update_item_status,
     },
@@ -46,6 +46,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/clusters", get(get_clusters))
         .route("/clusters/{id}/status", put(update_cluster_status))
+        .route("/clusters/{id}/thread", get(get_story_thread))
         .route("/clusters/{id}/summary", get(get_story_summary))
         .route(
             "/clusters/{id}/summary/status",

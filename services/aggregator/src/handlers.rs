@@ -12,7 +12,8 @@ use crate::{
         AllUnreadCountsResponse, ClusterResponse, ClusterStatusResponse, ErrorResponse,
         FeedUnreadCount, GetClustersQuery, GetItemsQuery, GetUnreadCountsQuery, ItemResponse,
         MarkAllReadRequest, MarkAllReadResponse, ReadStatusResponse, StorySummaryResponse,
-        StorySummaryStatusResponse, UnreadCountResponse, UpdateItemStatusRequest,
+        StorySummaryStatusResponse, ThreadResponse, ThreadStoryResponse, UnreadCountResponse,
+        UpdateItemStatusRequest,
     },
     ranking,
     state::AppState,
@@ -753,6 +754,84 @@ pub async fn get_clusters(
     )
     .await;
     Ok(Json(clusters))
+}
+
+/// The timeline of the thread containing one story.
+pub async fn get_story_thread(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+    Path(story_id): Path<Uuid>,
+) -> Result<Json<ThreadResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let thread_id = sqlx::query_scalar!(
+        r#"
+        SELECT c.thread_id
+        FROM clusters c
+        JOIN items i ON i.cluster_id = c.id
+        JOIN feeds f ON f.source_id = i.source_id
+        JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2
+        WHERE c.id = $1 AND c.thread_id IS NOT NULL
+        LIMIT 1
+        "#,
+        story_id,
+        user_id,
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Story has no thread".to_string(),
+            }),
+        )
+    })?;
+
+    let stories = sqlx::query_as!(
+        ThreadStoryResponse,
+        r#"
+        SELECT c.id as "id!",
+               COALESCE((array_agg(i.title ORDER BY i.published_at))[1], c.title_summary)
+                   as "title!",
+               MIN(i.published_at) as "sort_date!",
+               COUNT(DISTINCT i.id)::bigint as "item_count!",
+               BOOL_OR(COALESCE(ir.is_read, false)) as "is_read!",
+               MAX(ROUND(ir.liked))::REAL as "liked?"
+        FROM clusters c
+        JOIN items i ON i.cluster_id = c.id
+        JOIN feeds f ON f.source_id = i.source_id
+        JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2
+        LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $2
+        WHERE c.thread_id = $1
+        GROUP BY c.id, c.title_summary
+        ORDER BY MIN(i.published_at) ASC
+        "#,
+        thread_id,
+        user_id,
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )
+    })?;
+
+    let title = stories
+        .first()
+        .map(|story| story.title.clone())
+        .unwrap_or_default();
+    Ok(Json(ThreadResponse {
+        id: thread_id,
+        title,
+        stories,
+    }))
 }
 
 /// The user's cached summary of one story, if the worker has stored it.

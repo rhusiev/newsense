@@ -122,7 +122,10 @@ A user may supply their own endpoint and key with `PUT /settings/llm-key`
 `not-applicable`, the cached summary when ready, whether a newer article makes
 it stale, and today's call count and limit. `POST /clusters/{id}/summary/refresh`
 drops the cached summary so the worker makes a new one. `GET /admin/users/llm`
-lists each user's switch and limit for the admin tab.
+lists each user's switch and limit for the admin tab. `GET
+/clusters/{id}/thread` returns the timeline of the thread containing a story:
+its id, first headline and stories ordered by date with item counts and the
+viewer's read state.
 
 For OpenRouter, set `LLM_BASE_URL=https://openrouter.ai/api/v1`,
 `LLM_MODEL=z-ai/glm-5.3-flash`, and optionally
