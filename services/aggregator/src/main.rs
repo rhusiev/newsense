@@ -57,8 +57,12 @@ async fn main() {
         .with_secure(is_production)
         .with_same_site(tower_sessions::cookie::SameSite::Lax)
         .with_expiry(Expiry::OnInactivity(Duration::new(3600, 0)))
-        .with_name(SESSION_COOKIE_NAME)
-        .with_domain(cookie_domain);
+        .with_name(SESSION_COOKIE_NAME);
+    let session_layer = if cookie_domain.is_empty() {
+        session_layer
+    } else {
+        session_layer.with_domain(cookie_domain)
+    };
 
     let app_state = AppState { db: pool };
 
