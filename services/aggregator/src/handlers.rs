@@ -946,12 +946,20 @@ pub async fn get_story_thread(
         story_id,
         user_id,
     )
-    .fetch_one(&state.db)
+    .fetch_optional(&state.db)
     .await
     .map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse { error: e.to_string() }),
+        )
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Story has no thread".to_string(),
+            }),
         )
     })?
     .ok_or_else(|| {
