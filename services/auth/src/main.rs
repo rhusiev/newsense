@@ -129,9 +129,12 @@ async fn main() {
     };
     let csrf_config = CsrfConfig::default();
 
+    // `per_second(n)` in tower_governor 0.8 is the refill PERIOD in seconds,
+    // not requests per second. Use `per_millisecond` for a real rate: one token
+    // every 100 ms is 10 requests/s, with a 60-token burst for page loads.
     let governor_config = GovernorConfigBuilder::default()
-        .per_second(30)
-        .burst_size(40)
+        .per_millisecond(100)
+        .burst_size(60)
         .finish()
         .unwrap();
 
