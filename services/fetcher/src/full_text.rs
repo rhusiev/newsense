@@ -20,6 +20,8 @@ const PER_HOST_GAP: Duration = Duration::from_secs(5);
 const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 5;
 const MAX_ERROR_CHARS: usize = 500;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const USER_AGENT: &str = "Mozilla/5.0 (compatible; RSSReader/1.0)";
 /// Where an image's address waits until the user asks for the image.
 const DEFERRED_SRC: &str = "data-src";
 
@@ -35,14 +37,14 @@ struct Extracted {
     text: String,
 }
 
-pub async fn full_text_task(pool: PgPool, client: reqwest::Client) {
+pub async fn full_text_task(pool: PgPool) {
     let mut last_request: HashMap<String, Instant> = HashMap::new();
     info!("Full-text task started");
     loop {
         match pending_items(&pool).await {
             Ok(items) => {
                 for item in items {
-                    let outcome = fetch_politely(&client, &mut last_request, &item.link).await;
+                    let outcome = fetch_politely(&mut last_request, &item.link).await;
                     if let Err(e) = store(&pool, item.id, outcome).await {
                         error!("Full-text store failed for {}: {}", item.id, e);
                     }
@@ -110,7 +112,6 @@ async fn store(
 
 /// Waits until the host has had `PER_HOST_GAP` of rest, then fetches.
 async fn fetch_politely(
-    client: &reqwest::Client,
     last_request: &mut HashMap<String, Instant>,
     link: &str,
 ) -> Result<Extracted, BoxError> {
@@ -122,16 +123,26 @@ async fn fetch_politely(
         }
     }
     last_request.insert(host, Instant::now());
-    let (final_url, html) = fetch_page(client, link).await?;
+    let (final_url, html) = fetch_page(link).await?;
     tokio::task::spawn_blocking(move || extract(&html, &final_url)).await?
 }
 
 /// Follows redirects by hand so that every hop is checked against private addresses.
 /// The client must be built with redirects disabled.
-async fn fetch_page(client: &reqwest::Client, link: &str) -> Result<(String, String), BoxError> {
+async fn fetch_page(link: &str) -> Result<(String, String), BoxError> {
     let mut url = Url::parse(link)?;
     for _ in 0..=MAX_REDIRECTS {
-        ensure_public(&url).await?;
+        let resolved = ensure_public(&url).await?;
+        let mut client_builder = reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .user_agent(USER_AGENT)
+            .redirect(reqwest::redirect::Policy::none());
+        for addr in &resolved {
+            client_builder = client_builder.resolve(
+                url.host_str().ok_or("no host")?, *addr,
+            );
+        }
+        let client = client_builder.build()?;
         let mut response = client.get(url.clone()).send().await?;
         if response.status().is_redirection() {
             let location = response
@@ -167,18 +178,17 @@ async fn fetch_page(client: &reqwest::Client, link: &str) -> Result<(String, Str
 /// Refuses hosts that resolve to loopback, private or link-local addresses,
 /// so a feed link cannot make the fetcher read services inside the network.
 /// A host that changes its DNS answer between this check and the request is not caught.
-async fn ensure_public(url: &Url) -> Result<(), BoxError> {
+async fn ensure_public(url: &Url) -> Result<Vec<std::net::SocketAddr>, BoxError> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err("only http and https are fetched".into());
     }
     let host = url.host_str().ok_or("no host")?;
     let port = url.port_or_known_default().ok_or("no port")?;
-    for addr in tokio::net::lookup_host((host, port)).await? {
-        if !is_public(addr.ip()) {
-            return Err("host resolves to a private address".into());
-        }
+    let resolved: Vec<_> = tokio::net::lookup_host((host, port)).await?.collect();
+    if resolved.is_empty() || resolved.iter().any(|addr| !is_public(addr.ip())) {
+        return Err("host resolves to a private address".into());
     }
-    Ok(())
+    Ok(resolved)
 }
 
 fn is_public(ip: IpAddr) -> bool {

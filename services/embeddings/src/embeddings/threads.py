@@ -197,8 +197,10 @@ async def update_threads(conn) -> int:
     for i, label in enumerate(labels):
         members.setdefault(int(label), []).append(i)
 
+    old_thread_ids = {row["thread_id"] for row in rows if row["thread_id"]}
+    chosen: dict[int, object] = {}
     async with conn.transaction():
-        for indices in members.values():
+        for label, indices in members.items():
             if len(indices) < 2:
                 continue
             existing = [rows[i]["thread_id"] for i in indices if rows[i]["thread_id"]]
@@ -209,17 +211,17 @@ async def update_threads(conn) -> int:
                     "INSERT INTO threads (last_story_at) VALUES ($1) RETURNING id",
                     max(rows[i]["started_at"] for i in indices),
                 )
+            chosen[label] = thread_id
             for i in indices:
                 alt = alternatives.get(i)
                 alt_id = None
-                if alt is not None and alt in members:
-                    alt_ids = [rows[j]["thread_id"] for j in members[alt] if rows[j]["thread_id"]]
-                    alt_id = alt_ids[0] if alt_ids else None
+                if alt is not None and alt in chosen:
+                    alt_id = chosen[alt]
                 await conn.execute(
                     "UPDATE clusters SET thread_id = $1, threads_checked_at = now(), "
                     "thread_confidence = $2, thread_alternative_id = $3 WHERE id = $4",
                     thread_id,
-                    max((confidence.get(i, 0.0) for i in indices), default=0.0),
+                    confidence.get(i, 0.0),
                     alt_id,
                     rows[i]["id"],
                 )
@@ -238,6 +240,13 @@ async def update_threads(conn) -> int:
                     "thread_confidence = 0, thread_alternative_id = NULL WHERE id = $1",
                     rows[i]["id"],
                 )
+        kept = {row["thread_id"] for row in rows if row["thread_id"]}
+        for thread_id in old_thread_ids - kept:
+            await conn.execute(
+                "DELETE FROM threads WHERE id = $1 AND NOT EXISTS "
+                "(SELECT 1 FROM clusters WHERE thread_id = $1)",
+                thread_id,
+            )
     joined = sum(len(indices) for indices in members.values() if len(indices) > 1)
     logger.info(
         "Threads: checked %d stories, %d in %d threads",
