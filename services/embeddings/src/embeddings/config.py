@@ -34,13 +34,16 @@ MIN_TRAINING_SAMPLES = 5
 THREAD_KNN = int(os.getenv("THREAD_KNN", "10"))
 THREAD_EMBEDDING_MIN = 0.86
 THREAD_RESOLUTION = float(os.getenv("THREAD_RESOLUTION", "2"))
+THREAD_GAP_DAYS = 7
 # The LLM verifier decides same-storyline pairs; cosine only proposes candidates.
 THREAD_LLM_ENABLED = os.getenv("THREAD_LLM_ENABLED", "1").lower() in (
     "1", "true", "yes"
 )
 THREAD_LLM_THRESHOLD = float(os.getenv("THREAD_LLM_THRESHOLD", "0.7"))
 THREAD_LLM_MAX_CALLS = int(os.getenv("THREAD_LLM_MAX_CALLS", "2000"))
+THREAD_LLM_DAILY_CALLS = int(os.getenv("THREAD_LLM_DAILY_CALLS", "1000"))
 THREAD_LLM_CONCURRENCY = int(os.getenv("THREAD_LLM_CONCURRENCY", "8"))
+THREAD_LLM_MAX_CHARS = int(os.getenv("THREAD_LLM_MAX_CHARS", "700"))
 # Add neighbors of neighbours so a story chain is not cut by the k limit.
 THREAD_TWO_HOP = os.getenv("THREAD_TWO_HOP", "0").lower() in ("1", "true", "yes")
 # Optional local pair scorer: a quantized ONNX cross-encoder plus its tokenizer.

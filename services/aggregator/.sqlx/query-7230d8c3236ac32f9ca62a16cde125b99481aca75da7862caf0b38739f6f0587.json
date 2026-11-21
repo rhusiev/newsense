@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT i.id as \"id!\",\n               ARRAY[f.id] as \"feed_ids!\",\n               i.title, i.link, i.content, i.author,\n               i.published_at, i.cluster_id, i.created_at,\n               ir.is_read as \"is_read?\",\n               ROUND(ir.liked)::REAL as \"liked?\",\n               ip.score as \"prediction_score?\"\n        FROM items i\n        JOIN sources s ON i.source_id = s.id\n        JOIN feeds f ON f.source_id = s.id\n        JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2\n        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $2\n        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $2\n        WHERE i.id = $1\n        ",
+  "query": "\n        SELECT i.id as \"id!\",\n               ARRAY[f.id] as \"feed_ids!\",\n               i.title, i.link, i.content, i.author,\n               i.published_at, i.cluster_id, i.created_at,\n               ir.is_read as \"is_read?\",\n               ROUND(ir.liked)::REAL as \"liked?\",\n               ip.score as \"prediction_score?\"\n        FROM items i\n        JOIN sources s ON i.source_id = s.id\n        JOIN feeds f ON f.source_id = s.id\n        LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2\n        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $2\n        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $2\n        WHERE i.id = $1 AND (f.is_public OR f.owner_id = $2 OR fs.user_id = $2)\n        ",
   "describe": {
     "columns": [
       {
@@ -85,5 +85,5 @@
       false
     ]
   },
-  "hash": "7f17219b0491b3b070c6aa696696ec31402d1785343d651b521b938e451c95f7"
+  "hash": "7230d8c3236ac32f9ca62a16cde125b99481aca75da7862caf0b38739f6f0587"
 }

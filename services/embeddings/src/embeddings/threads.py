@@ -20,6 +20,7 @@ from .config import (
     LLM_MODEL,
     THREAD_ALTERNATIVE_MIN,
     THREAD_EMBEDDING_MIN,
+    THREAD_GAP_DAYS,
     THREAD_KNN,
     THREAD_LLM_ENABLED,
     THREAD_RESOLUTION,
@@ -137,8 +138,8 @@ async def _load_stories(conn):
     rows = await conn.fetch(
         """
         SELECT c.id, c.thread_id, MIN(i.published_at) AS started_at,
-               string_agg(i.title, ' ') AS titles,
-               COALESCE(string_agg(LEFT(ft.text, 700), ' '), '') AS body,
+               string_agg(i.title, ' ' ORDER BY i.published_at, i.id) AS titles,
+               COALESCE(string_agg(LEFT(ft.text, 700), ' ' ORDER BY i.published_at, i.id), '') AS body,
                array_agg(i.story_embedding::text) AS embeddings
         FROM clusters c
         JOIN items i ON i.cluster_id = c.id
@@ -176,11 +177,19 @@ async def update_threads(conn) -> int:
         pairs = []
         index_of = {}
         for (i, j) in _candidates(sim, 0.0):
+            if abs((rows[i]["started_at"] - rows[j]["started_at"]).days) > THREAD_GAP_DAYS:
+                continue
             a, b = ids[i], ids[j]
             pair = (a, b) if a < b else (b, a)
             pairs.append(pair)
             index_of[pair] = (i, j) if i < j else (j, i)
         scored = await thread_verdicts.score_pairs(conn, pairs, texts_by_id)
+        if pairs and len(scored) < len(pairs) * 0.8:
+            logger.warning(
+                "Only %d of %d thread verdicts available; keeping existing threads",
+                len(scored), len(pairs),
+            )
+            return 0
         verdicts = {index_of[pair]: prob for pair, prob in scored.items()}
     labels, confidence, alternatives = group(vectors, texts, verdicts)
 

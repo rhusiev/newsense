@@ -18,7 +18,9 @@ from .config import (
     LLM_REASONING,
     LLM_REQUEST_TIMEOUT_S,
     THREAD_LLM_CONCURRENCY,
+    THREAD_LLM_DAILY_CALLS,
     THREAD_LLM_MAX_CALLS,
+    THREAD_LLM_MAX_CHARS,
     THREAD_LLM_THRESHOLD,
 )
 
@@ -28,7 +30,7 @@ SYSTEM = """You decide whether two news stories belong to the SAME news thread.
 A thread is one ongoing story: a specific event plus its direct updates, reactions, fallout, and follow-ups.
 Stories belong together when a reader would file them under the same headline, including later consequences and responses.
 Stories on the same topic but about separate incidents, different targets, different dates or different model versions are NOT the same thread.
-Recurring reports are one thread only when they are the same published series and the same day.
+Recurring reports belong to one thread when they are the same published series, even across days; a reader would expect them collapsed to the latest report.
 Reply with only compact JSON: {"same": true/false, "confidence": 0.0 to 1.0}"""
 
 
@@ -48,8 +50,8 @@ async def _call(client: httpx.AsyncClient, pair: tuple, texts: dict, model: str)
     title_a, body_a = texts[a]
     title_b, body_b = texts[b]
     user = (
-        f"Story A: {title_a}\n{body_a}\n\n"
-        f"Story B: {title_b}\n{body_b}"
+        f"Story A: {title_a[:THREAD_LLM_MAX_CHARS]}\n{body_a[:THREAD_LLM_MAX_CHARS]}\n\n"
+        f"Story B: {title_b[:THREAD_LLM_MAX_CHARS]}\n{body_b[:THREAD_LLM_MAX_CHARS]}"
     )
     payload = {
         "model": model,
@@ -74,7 +76,7 @@ async def _call(client: httpx.AsyncClient, pair: tuple, texts: dict, model: str)
         response.raise_for_status()
         content = response.json()["choices"][0]["message"]["content"]
         verdict = json.loads(content.strip().strip("`").replace("json\n", ""))
-        confidence = float(verdict.get("confidence", 0.5))
+        confidence = max(0.0, min(1.0, float(verdict.get("confidence", 0.5))))
         return confidence if verdict.get("same") else 1 - confidence
     except Exception as exc:
         logger.warning("Thread verdict failed for %s-%s: %s", a, b, str(exc)[:200])
@@ -96,6 +98,10 @@ async def score_pairs(conn, pairs: list[tuple], texts: dict) -> dict[tuple, floa
         [pid for pair in pairs for pid in pair],
     )
     cache = {(row["story_a"], row["story_b"]): row for row in rows}
+    today = await conn.fetchval(
+        "SELECT COUNT(*) FROM thread_pair_scores WHERE created_at >= date_trunc('day', now())"
+    )
+    remaining = max(0, THREAD_LLM_DAILY_CALLS - int(today))
     out: dict[tuple, float] = {}
     pending = []
     for pair in pairs:
@@ -106,8 +112,10 @@ async def score_pairs(conn, pairs: list[tuple], texts: dict) -> dict[tuple, floa
         row = cache.get(pair)
         if row and row["source_hash"] == digest:
             out[pair] = float(row["prob"])
-        elif len(pending) < THREAD_LLM_MAX_CALLS:
+        elif len(pending) < min(THREAD_LLM_MAX_CALLS, remaining):
             pending.append((pair, digest))
+        elif row:
+            out[pair] = float(row["prob"])
     if not pending:
         return out
 
@@ -122,6 +130,9 @@ async def score_pairs(conn, pairs: list[tuple], texts: dict) -> dict[tuple, floa
     async with conn.transaction():
         for pair, prob, digest in results:
             if prob is None:
+                row = cache.get(pair)
+                if row:
+                    out[pair] = float(row["prob"])
                 continue
             a, b = pair
             out[pair] = prob

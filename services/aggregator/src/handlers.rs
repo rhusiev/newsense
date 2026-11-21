@@ -775,10 +775,10 @@ pub async fn get_item(
         FROM items i
         JOIN sources s ON i.source_id = s.id
         JOIN feeds f ON f.source_id = s.id
-        JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2
+        LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $2
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $2
-        WHERE i.id = $1
+        WHERE i.id = $1 AND (f.is_public OR f.owner_id = $2 OR fs.user_id = $2)
         "#,
         item_id,
         user_id,
@@ -806,14 +806,15 @@ pub async fn list_threads(
             SELECT c.id, c.thread_id,
                    MIN(i.published_at) AS first_date,
                    MAX(i.published_at) AS last_date,
-                   BOOL_OR(COALESCE(ir.is_read, false)) AS is_read,
+                   BOOL_AND(COALESCE(ir.is_read, false)) AS is_read,
                    (array_agg(i.title ORDER BY i.published_at))[1] AS first_title
             FROM clusters c
             JOIN items i ON i.cluster_id = c.id
             JOIN feeds f ON f.source_id = i.source_id
-            JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $1
+            LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $1
             LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $1
             WHERE c.thread_id IS NOT NULL
+              AND (f.is_public OR f.owner_id = $1 OR fs.user_id = $1)
             GROUP BY c.id, c.thread_id
         )
         SELECT thread_id as "id!",
@@ -840,6 +841,91 @@ pub async fn list_threads(
     Ok(Json(threads))
 }
 
+async fn thread_response(
+    db: &sqlx::PgPool,
+    thread_id: Uuid,
+    user_id: Uuid,
+) -> Result<ThreadResponse, (StatusCode, Json<ErrorResponse>)> {
+    let stories = sqlx::query_as!(
+        ThreadStoryResponse,
+        r#"
+        SELECT c.id as "id!",
+               (array_agg(i.id ORDER BY i.published_at))[1] as "item_id!",
+               COALESCE((array_agg(i.title ORDER BY i.published_at))[1], c.title_summary)
+                   as "title!",
+               MIN(i.published_at) as "sort_date!",
+               COUNT(DISTINCT i.id)::bigint as "item_count!",
+               BOOL_AND(COALESCE(ir.is_read, false)) as "is_read!",
+               MAX(ROUND(ir.liked))::REAL as "liked?"
+        FROM clusters c
+        JOIN items i ON i.cluster_id = c.id
+        JOIN feeds f ON f.source_id = i.source_id
+        LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2
+        LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $2
+        WHERE c.thread_id = $1
+          AND (f.is_public OR f.owner_id = $2 OR fs.user_id = $2)
+        GROUP BY c.id, c.title_summary
+        ORDER BY MIN(i.published_at) ASC
+        "#,
+        thread_id,
+        user_id,
+    )
+    .fetch_all(db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )
+    })?;
+    let title = stories
+        .first()
+        .map(|story| story.title.clone())
+        .unwrap_or_default();
+    Ok(ThreadResponse {
+        id: thread_id,
+        title,
+        stories,
+    })
+}
+
+/// A thread by its id, for the briefing cards.
+pub async fn get_thread(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+    Path(thread_id): Path<Uuid>,
+) -> Result<Json<ThreadResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let found = sqlx::query_scalar!(
+        r#"
+        SELECT 1
+        FROM clusters c
+        JOIN items i ON i.cluster_id = c.id
+        JOIN feeds f ON f.source_id = i.source_id
+        LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2
+        WHERE c.thread_id = $1
+          AND (f.is_public OR f.owner_id = $2 OR fs.user_id = $2)
+        LIMIT 1
+        "#,
+        thread_id,
+        user_id,
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )
+    })?;
+    if found.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse { error: "Thread not found".to_string() }),
+        ));
+    }
+    thread_response(&state.db, thread_id, user_id).await.map(Json)
+}
+
 /// The timeline of the thread containing one story.
 pub async fn get_story_thread(
     State(state): State<AppState>,
@@ -852,8 +938,9 @@ pub async fn get_story_thread(
         FROM clusters c
         JOIN items i ON i.cluster_id = c.id
         JOIN feeds f ON f.source_id = i.source_id
-        JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2
+        LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2
         WHERE c.id = $1 AND c.thread_id IS NOT NULL
+          AND (f.is_public OR f.owner_id = $2 OR fs.user_id = $2)
         LIMIT 1
         "#,
         story_id,
@@ -876,47 +963,7 @@ pub async fn get_story_thread(
         )
     })?;
 
-    let stories = sqlx::query_as!(
-        ThreadStoryResponse,
-        r#"
-        SELECT c.id as "id!",
-               (array_agg(i.id ORDER BY i.published_at))[1] as "item_id!",
-               COALESCE((array_agg(i.title ORDER BY i.published_at))[1], c.title_summary)
-                   as "title!",
-               MIN(i.published_at) as "sort_date!",
-               COUNT(DISTINCT i.id)::bigint as "item_count!",
-               BOOL_OR(COALESCE(ir.is_read, false)) as "is_read!",
-               MAX(ROUND(ir.liked))::REAL as "liked?"
-        FROM clusters c
-        JOIN items i ON i.cluster_id = c.id
-        JOIN feeds f ON f.source_id = i.source_id
-        JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2
-        LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $2
-        WHERE c.thread_id = $1
-        GROUP BY c.id, c.title_summary
-        ORDER BY MIN(i.published_at) ASC
-        "#,
-        thread_id,
-        user_id,
-    )
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e.to_string() }),
-        )
-    })?;
-
-    let title = stories
-        .first()
-        .map(|story| story.title.clone())
-        .unwrap_or_default();
-    Ok(Json(ThreadResponse {
-        id: thread_id,
-        title,
-        stories,
-    }))
+    thread_response(&state.db, thread_id, user_id).await.map(Json)
 }
 
 /// The user's cached summary of one story, if the worker has stored it.
@@ -1082,7 +1129,11 @@ pub async fn update_cluster_status(    State(state): State<AppState>,
         WITH target_items AS (
             SELECT i.id
             FROM items i
-            WHERE i.cluster_id = $2 OR (i.cluster_id IS NULL AND i.id = $2)
+            JOIN sources s ON i.source_id = s.id
+            JOIN feeds f ON f.source_id = s.id
+            LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $1
+            WHERE (i.cluster_id = $2 OR (i.cluster_id IS NULL AND i.id = $2))
+              AND (f.is_public OR f.owner_id = $1 OR fs.user_id = $1)
         )
         INSERT INTO item_reads (user_id, item_id, is_read, liked, marked_at)
         SELECT $1, id, COALESCE($3::BOOLEAN, true), $4::REAL, CURRENT_TIMESTAMP

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT c.thread_id\n        FROM clusters c\n        JOIN items i ON i.cluster_id = c.id\n        JOIN feeds f ON f.source_id = i.source_id\n        LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2\n        WHERE c.id = $1 AND c.thread_id IS NOT NULL\n          AND (f.is_public OR f.owner_id = $2 OR fs.user_id = $2)\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "thread_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "d9900189c6480dd1b3ec14c0d12748112f708e994ec78e8ed1ea7edb8b4daa73"
+}

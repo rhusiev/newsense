@@ -85,7 +85,9 @@ The chosen setup is `THREAD_KNN=10` with `THREAD_LLM_ENABLED=1`: the worker
 asks the configured LLM whether each candidate pair follows one storyline and
 joins pairs scoring at least `THREAD_LLM_THRESHOLD`. Verdicts are cached in
 `thread_pair_scores` per pair, model and text hash, so reruns do not pay twice.
-`THREAD_LLM_MAX_CALLS` caps one run. A local quantized ONNX scorer can be used
+`THREAD_LLM_MAX_CALLS` caps one run and `THREAD_LLM_DAILY_CALLS` caps one day;
+each side of a pair is shortened to `THREAD_LLM_MAX_CHARS` before it is sent.
+A local quantized ONNX scorer can be used
 instead by setting `THREAD_PAIR_MODEL` and disabling the LLM verifier; its
 inference is batched by `THREAD_PAIR_BATCH` (default 64). `THREAD_TWO_HOP=1`
 adds neighbors of neighbors so chains are not cut by the k limit.

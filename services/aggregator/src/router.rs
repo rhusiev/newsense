@@ -9,7 +9,7 @@ use crate::{
         get_all_items, get_all_unread_count, get_all_unread_counts, get_cluster_unread_count,
         get_clusters, get_feed_cluster_unread_count, get_feed_clusters, get_feed_items,
         get_feed_unread_count, get_item, get_story_summary_status, get_story_summary,
-        get_story_thread, list_threads, mark_all_items_read, mark_feed_clusters_read, refresh_story_summary,
+        get_story_thread, get_thread, list_threads, mark_all_items_read, mark_feed_clusters_read, refresh_story_summary,
         mark_feed_items_read, update_cluster_status, update_item_status,
     },
 };
@@ -40,13 +40,10 @@ pub fn routes() -> Router<AppState> {
             "/clusters/feed/{feed_id}/mark-read",
             post(mark_feed_clusters_read),
         )
-        .route(
-            "/clusters/feed/{feed_id}/unread-count",
-            get(get_feed_cluster_unread_count),
-        )
         .route("/items/{id}", get(get_item))
         .route("/clusters", get(get_clusters))
         .route("/threads", get(list_threads))
+        .route("/threads/{id}", get(get_thread))
         .route("/clusters/{id}/status", put(update_cluster_status))
         .route("/clusters/{id}/thread", get(get_story_thread))
         .route("/clusters/{id}/summary", get(get_story_summary))
@@ -60,3 +57,12 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/clusters/unread-count", get(get_cluster_unread_count))
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn routes_build_without_overlap() {
+        let _ = super::routes();
+    }
+}
+
