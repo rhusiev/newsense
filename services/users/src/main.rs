@@ -235,11 +235,12 @@ async fn main() {
         .layer(cors)
         .with_state(app_state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3001")
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3001".to_string());
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
         .await
         .expect("Failed to bind");
 
-    println!("Users Service running on http://0.0.0.0:3001");
+    println!("Users Service running on http://0.0.0.0:{port}");
 
     axum::serve(
         listener,
