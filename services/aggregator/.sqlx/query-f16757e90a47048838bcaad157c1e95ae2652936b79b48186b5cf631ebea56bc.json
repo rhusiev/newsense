@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT c.id as \"id!\",\n               (array_agg(i.id ORDER BY i.published_at))[1] as \"item_id!\",\n               COALESCE((array_agg(i.title ORDER BY i.published_at))[1], c.title_summary)\n                   as \"title!\",\n               MIN(i.published_at) as \"sort_date!\",\n               COUNT(DISTINCT i.id)::bigint as \"item_count!\",\n               BOOL_OR(COALESCE(ir.is_read, false)) as \"is_read!\",\n               MAX(ROUND(ir.liked))::REAL as \"liked?\"\n        FROM clusters c\n        JOIN items i ON i.cluster_id = c.id\n        JOIN feeds f ON f.source_id = i.source_id\n        JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2\n        LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $2\n        WHERE c.thread_id = $1\n        GROUP BY c.id, c.title_summary\n        ORDER BY MIN(i.published_at) ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "item_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "sort_date!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "item_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "is_read!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "liked?",
+        "type_info": "Float4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "f16757e90a47048838bcaad157c1e95ae2652936b79b48186b5cf631ebea56bc"
+}

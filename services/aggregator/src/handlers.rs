@@ -756,6 +756,44 @@ pub async fn get_clusters(
     Ok(Json(clusters))
 }
 
+/// One item for the reader, including its per-user state.
+pub async fn get_item(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+    Path(item_id): Path<Uuid>,
+) -> Result<Json<ItemResponse>, (StatusCode, Json<ErrorResponse>)> {
+    sqlx::query_as!(
+        ItemResponse,
+        r#"
+        SELECT i.id as "id!",
+               ARRAY[f.id] as "feed_ids!",
+               i.title, i.link, i.content, i.author,
+               i.published_at, i.cluster_id, i.created_at,
+               ir.is_read as "is_read?",
+               ROUND(ir.liked)::REAL as "liked?",
+               ip.score as "prediction_score?"
+        FROM items i
+        JOIN sources s ON i.source_id = s.id
+        JOIN feeds f ON f.source_id = s.id
+        JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2
+        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $2
+        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $2
+        WHERE i.id = $1
+        "#,
+        item_id,
+        user_id,
+    )
+    .fetch_one(&state.db)
+    .await
+    .map(Json)
+    .map_err(|e| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse { error: e.to_string() }),
+        )
+    })
+}
+
 /// Storylines visible to the viewer, newest first.
 pub async fn list_threads(
     State(state): State<AppState>,
@@ -842,6 +880,7 @@ pub async fn get_story_thread(
         ThreadStoryResponse,
         r#"
         SELECT c.id as "id!",
+               (array_agg(i.id ORDER BY i.published_at))[1] as "item_id!",
                COALESCE((array_agg(i.title ORDER BY i.published_at))[1], c.title_summary)
                    as "title!",
                MIN(i.published_at) as "sort_date!",

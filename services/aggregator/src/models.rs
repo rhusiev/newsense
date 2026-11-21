@@ -169,6 +169,7 @@ pub struct ThreadBriefResponse {
 #[derive(Serialize)]
 pub struct ThreadStoryResponse {
     pub id: Uuid,
+    pub item_id: Uuid,
     pub title: String,
     #[serde(with = "time::serde::iso8601")]
     pub sort_date: time::OffsetDateTime,
