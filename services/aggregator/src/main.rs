@@ -38,6 +38,10 @@ async fn main() {
         .await
         .expect("Failed to migrate store");
 
+    let summaries_enabled = std::env::var("LLM_SUMMARIES_ENABLED")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
     let is_dev = cfg!(debug_assertions);
     let is_production = !is_dev;
 
@@ -64,8 +68,6 @@ async fn main() {
         session_layer.with_domain(cookie_domain)
     };
 
-    let app_state = AppState { db: pool };
-
     let web_url = std::env::var("WEB_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
 
     let allowed_origins = [
@@ -83,6 +85,10 @@ async fn main() {
         ])
         .allow_credentials(true);
 
+    let app_state = AppState {
+        db: pool.clone(),
+        summaries_enabled,
+    };
     let app = router::routes()
         .layer(session_layer)
         .layer(cors)

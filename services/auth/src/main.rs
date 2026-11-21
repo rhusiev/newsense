@@ -74,6 +74,13 @@ async fn main() {
     .await
     .expect("Failed to create access_codes table");
 
+    // Older databases already have this table without the column. Add it
+    // idempotently so code redemption and admin code views never break.
+    sqlx::query("ALTER TABLE access_codes ADD COLUMN IF NOT EXISTS uses_left INT NOT NULL DEFAULT 1")
+        .execute(&pool)
+        .await
+        .expect("Failed to add uses_left to access_codes");
+
     let is_dev = cfg!(debug_assertions);
     let is_production = !is_dev;
 

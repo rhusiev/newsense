@@ -110,6 +110,10 @@ LLM_MODEL=your-model
 LLM_SUMMARY_INTERVAL_MINUTES=5
 ```
 
+The aggregator only reports summaries when `LLM_SUMMARIES_ENABLED=1`, which
+should be set when the worker has an OpenAI-compatible endpoint. Without it the
+reader shows no summary card, instead of a pending card that never resolves.
+
 The daily limit is 70 per user; an admin can change it with
 `PUT /admin/users/{id}/llm` and `{"daily_limit": 100}`. Users opt in and out
 with `llm_summaries` in `PUT /settings`.

@@ -954,24 +954,16 @@ pub async fn get_story_thread(
             Json(ErrorResponse { error: e.to_string() }),
         )
     })?
-    .ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "Story has no thread".to_string(),
-            }),
-        )
-    })?
-    .ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "Story has no thread".to_string(),
-            }),
-        )
-    })?;
+    .flatten();
 
-    thread_response(&state.db, thread_id, user_id).await.map(Json)
+    if let Some(thread_id) = thread_id {
+        return thread_response(&state.db, thread_id, user_id).await.map(Json);
+    }
+    Ok(Json(ThreadResponse {
+        id: story_id,
+        title: String::new(),
+        stories: Vec::new(),
+    }))
 }
 
 /// The user's cached summary of one story, if the worker has stored it.
@@ -1107,7 +1099,10 @@ pub async fn get_story_summary_status(
         )
     })?;
 
-    let applicable = row.summaries && row.allowed && row.eligible;
+    let applicable = state.summaries_enabled
+        && row.summaries
+        && row.allowed
+        && row.eligible;
     let ready = row.summary.is_some();
     Ok(Json(StorySummaryStatusResponse {
         status: if !applicable {
