@@ -22,6 +22,7 @@ from .config import (
     LLM_BASE_URL,
     LLM_MODEL,
     LLM_PROVIDER_ROUTING,
+    LLM_SUMMARIES_ENABLED,
     LLM_REASONING,
     LLM_REQUEST_TIMEOUT_S,
     LLM_SUMMARY_MAX_ATTEMPTS,
@@ -233,6 +234,8 @@ async def _call_model(config, title: str, body: str, language: str | None) -> st
 
 async def update_summaries(conn) -> int:
     """Summarizes one batch of pending stories. Returns the number stored."""
+    if not LLM_SUMMARIES_ENABLED:
+        return 0
     candidates = await conn.fetch(
         CANDIDATES,
         LLM_SUMMARY_MAX_ATTEMPTS,

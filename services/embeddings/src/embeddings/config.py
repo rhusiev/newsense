@@ -67,6 +67,7 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "")
 # Optional JSON provider routing, e.g. {"data_collection":"deny","zdr":true} for OpenRouter.
 LLM_PROVIDER_ROUTING = os.getenv("LLM_PROVIDER_ROUTING", "")
+LLM_SUMMARIES_ENABLED = os.getenv("LLM_SUMMARIES_ENABLED", "1").lower() in ("1", "true", "yes")
 LLM_SUMMARY_INTERVAL_MINUTES = int(os.getenv("LLM_SUMMARY_INTERVAL_MINUTES", "5"))
 LLM_SUMMARY_BATCH = int(os.getenv("LLM_SUMMARY_BATCH", "5"))
 LLM_SUMMARY_MAX_WORDS = 180

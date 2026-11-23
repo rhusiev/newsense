@@ -956,14 +956,15 @@ pub async fn get_story_thread(
     })?
     .flatten();
 
-    if let Some(thread_id) = thread_id {
-        return thread_response(&state.db, thread_id, user_id).await.map(Json);
-    }
-    Ok(Json(ThreadResponse {
-        id: story_id,
-        title: String::new(),
-        stories: Vec::new(),
-    }))
+    let thread_id = thread_id.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Story has no thread".to_string(),
+            }),
+        )
+    })?;
+    thread_response(&state.db, thread_id, user_id).await.map(Json)
 }
 
 /// The user's cached summary of one story, if the worker has stored it.
@@ -972,6 +973,14 @@ pub async fn get_story_summary(
     AuthUser { id: user_id, .. }: AuthUser,
     Path(story_id): Path<Uuid>,
 ) -> Result<Json<StorySummaryResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if !state.summaries_enabled {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Summaries are not configured".into(),
+            }),
+        ));
+    }
     let row = sqlx::query!(
         r#"
         SELECT summary, model, updated_at
@@ -1013,6 +1022,14 @@ pub async fn refresh_story_summary(
     AuthUser { id: user_id, .. }: AuthUser,
     Path(story_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    if !state.summaries_enabled {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Summaries are not configured".into(),
+            }),
+        ));
+    }
     sqlx::query!(
         "DELETE FROM story_summaries WHERE user_id = $1 AND story_id = $2",
         user_id,
