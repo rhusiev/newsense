@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM story_summaries WHERE user_id = $1 AND story_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b35cad23940d50f7297ca8edc9c03d722f1811f3ea52ab690de779b3860b9195"
+}

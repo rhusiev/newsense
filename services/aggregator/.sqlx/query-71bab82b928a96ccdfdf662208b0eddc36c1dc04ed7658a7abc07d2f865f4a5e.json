@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH target_scope AS (\n            SELECT i.cluster_id, i.id\n            FROM items i\n            INNER JOIN feeds f ON i.source_id = f.source_id\n            WHERE f.id = $2 AND i.published_at >= $3\n              AND ($4::TIMESTAMPTZ IS NULL OR i.published_at < $4)\n        )\n        INSERT INTO item_reads (user_id, item_id, is_read, liked, marked_at)\n        SELECT DISTINCT $1::uuid, i.id, true, NULL::REAL, CURRENT_TIMESTAMP\n        FROM items i\n        WHERE\n            (i.cluster_id IS NULL AND i.id IN (SELECT id FROM target_scope))\n            OR\n            (i.cluster_id IS NOT NULL AND i.cluster_id IN (SELECT cluster_id FROM target_scope))\n        ON CONFLICT (user_id, item_id)\n        DO UPDATE SET is_read = true, marked_at = CURRENT_TIMESTAMP\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "71bab82b928a96ccdfdf662208b0eddc36c1dc04ed7658a7abc07d2f865f4a5e"
+}

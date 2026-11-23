@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE user_settings SET\n            llm_allowed = COALESCE($2, llm_allowed),\n            llm_daily_limit = COALESCE($3, llm_daily_limit),\n            updated_at = CURRENT_TIMESTAMP\n        WHERE user_id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "88bfc1b56a4e90704b68745feecc9c4b520bbc9441bc992be38cfe8a0f7ecf89"
+}

@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO item_reads (user_id, item_id, is_read, liked)\n        VALUES ($1, $2, COALESCE($3::BOOLEAN, true), $4::REAL)\n        ON CONFLICT (user_id, item_id)\n        DO UPDATE SET\n            is_read = COALESCE($3::BOOLEAN, item_reads.is_read),\n            liked = CASE WHEN $5::BOOLEAN THEN $4::REAL ELSE item_reads.liked END,\n            marked_at = CURRENT_TIMESTAMP\n        RETURNING\n            user_id, item_id, is_read, ROUND(liked)::REAL as \"liked?\", marked_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "item_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "is_read",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "liked?",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 4,
+        "name": "marked_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool",
+        "Float4",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      true
+    ]
+  },
+  "hash": "d615f51316a725399c3b397d6c8f46216566ba0f438ad2a570ef3f7e28259d5e"
+}

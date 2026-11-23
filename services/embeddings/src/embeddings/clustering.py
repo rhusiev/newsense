@@ -1,4 +1,6 @@
 import datetime
+import re
+
 import spacy
 from .config import (
     DISTANCE_THRESHOLD,
@@ -53,6 +55,14 @@ def prepare_embeddings(title: str, content: str, encode_fn):
     return combined_final, combined_l6
 
 
+def prepare_story_embedding(title: str, content: str, encode_fn):
+    """Full-text vector for thread grouping, separate from the cluster vector."""
+    text = re.sub(r"<[^>]+>", " ", content)
+    text = re.sub(r"\s+", " ", text).strip()
+    story, _ = encode_fn([f"passage: {title}. {text}"])
+    return story[0]
+
+
 async def find_matching_cluster(
     conn, embedding_list: list, reference_time: datetime.datetime
 ):
@@ -88,22 +98,39 @@ async def create_cluster(
 
 
 async def update_item_with_cluster(
-    conn, item_id: str, embedding_list: list, l6_embedding_list: list, cluster_id: str
+    conn, item_id: str, embedding_list: list, l6_embedding_list: list,
+    story_embedding_list: list, cluster_id: str,
 ):
     await conn.execute(
         """
-        UPDATE items 
-        SET embedding = $1, l6_embedding = $2, cluster_id = $3
-        WHERE id = $4
+        UPDATE items
+        SET embedding = $1, l6_embedding = $2, story_embedding = $3, cluster_id = $4
+        WHERE id = $5
         """,
         str(embedding_list),
         str(l6_embedding_list),
+        str(story_embedding_list),
         cluster_id,
         item_id,
     )
 
 
 from .predictions import generate_predictions_for_item
+
+
+async def backfill_story_embedding(conn, encode_fn, item_id: str) -> None:
+    """Store the full-text vector for an article embedded before threads existed."""
+    row = await conn.fetchrow(
+        "SELECT title, content FROM items WHERE id = $1", item_id
+    )
+    if not row:
+        return
+    vector = prepare_story_embedding(
+        row["title"] or "", row["content"] or "", encode_fn
+    ).tolist()
+    await conn.execute(
+        "UPDATE items SET story_embedding = $1 WHERE id = $2", str(vector), item_id
+    )
 
 
 async def process_item_logic(conn, encode_fn, item_id: str):
@@ -122,6 +149,7 @@ async def process_item_logic(conn, encode_fn, item_id: str):
     combined_final, combined_l6 = prepare_embeddings(title, content, encode_fn)
     embedding_list = combined_final.tolist()
     l6_embedding_list = combined_l6.tolist()
+    story_embedding_list = prepare_story_embedding(title, content, encode_fn).tolist()
 
     reference_time = row["published_at"] or datetime.datetime.now(datetime.timezone.utc)
 
@@ -131,7 +159,7 @@ async def process_item_logic(conn, encode_fn, item_id: str):
         cluster_id = await create_cluster(conn, embedding_list, title, reference_time)
 
     await update_item_with_cluster(
-        conn, item_id, embedding_list, l6_embedding_list, cluster_id
+        conn, item_id, embedding_list, l6_embedding_list, story_embedding_list, cluster_id
     )
 
     try:

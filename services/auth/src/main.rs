@@ -74,6 +74,13 @@ async fn main() {
     .await
     .expect("Failed to create access_codes table");
 
+    // Older databases already have this table without the column. Add it
+    // idempotently so code redemption and admin code views never break.
+    sqlx::query("ALTER TABLE access_codes ADD COLUMN IF NOT EXISTS uses_left INT NOT NULL DEFAULT 1")
+        .execute(&pool)
+        .await
+        .expect("Failed to add uses_left to access_codes");
+
     let is_dev = cfg!(debug_assertions);
     let is_production = !is_dev;
 
@@ -99,8 +106,12 @@ async fn main() {
         .with_secure(is_production)
         .with_same_site(tower_sessions::cookie::SameSite::Lax)
         .with_expiry(Expiry::OnInactivity(Duration::new(3600, 0)))
-        .with_name(SESSION_COOKIE_NAME)
-        .with_domain(cookie_domain.clone());
+        .with_name(SESSION_COOKIE_NAME);
+    let session_layer = if cookie_domain.is_empty() {
+        session_layer
+    } else {
+        session_layer.with_domain(cookie_domain.clone())
+    };
 
     let registration_enabled = std::env::var("REGISTRATION_ENABLED")
         .map(|val| match val.to_lowercase().as_str() {
@@ -118,9 +129,12 @@ async fn main() {
     };
     let csrf_config = CsrfConfig::default();
 
+    // `per_second(n)` in tower_governor 0.8 is the refill PERIOD in seconds,
+    // not requests per second. Use `per_millisecond` for a real rate: one token
+    // every 100 ms is 10 requests/s, with a 60-token burst for page loads.
     let governor_config = GovernorConfigBuilder::default()
-        .per_second(30)
-        .burst_size(40)
+        .per_millisecond(100)
+        .burst_size(60)
         .finish()
         .unwrap();
 
@@ -175,11 +189,12 @@ async fn main() {
         .layer(cors)
         .with_state(app_state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
         .await
         .expect("Failed to bind");
 
-    println!("Server running on http://0.0.0.0:3000");
+    println!("Server running on http://0.0.0.0:{port}");
 
     axum::serve(
         listener,

@@ -12,6 +12,8 @@ use tower_sessions::{Expiry, Session, SessionManagerLayer, cookie::time::Duratio
 use tower_sessions_sqlx_store::PostgresStore;
 use uuid::Uuid;
 
+mod settings;
+
 const SESSION_COOKIE_NAME: &str = "newsense_session";
 
 #[derive(Clone)]
@@ -33,6 +35,8 @@ struct UpdateFeedRequest {
     title: Option<String>,
     description: Option<String>,
     is_public: Option<bool>,
+    /// Fetch each new article's page. Only for private feeds.
+    full_text: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -43,6 +47,7 @@ struct FeedResponse {
     title: Option<String>,
     description: Option<String>,
     is_public: Option<bool>,
+    full_text: bool,
     #[serde(with = "time::serde::iso8601::option")]
     created_at: Option<time::OffsetDateTime>,
     subscriber_count: i64,
@@ -123,7 +128,7 @@ async fn fetch_feed_with_count(db: &PgPool, feed_id: Uuid) -> Result<FeedRespons
     sqlx::query_as!(
         FeedResponse,
         r#"
-        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.created_at,
+        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.full_text, f.created_at,
                COUNT(fs.user_id) as "subscriber_count!"
         FROM feeds f
         JOIN sources s ON f.source_id = s.id
@@ -173,8 +178,12 @@ async fn main() {
         .with_secure(is_production)
         .with_same_site(tower_sessions::cookie::SameSite::Lax)
         .with_expiry(Expiry::OnInactivity(Duration::new(3600, 0)))
-        .with_name(SESSION_COOKIE_NAME)
-        .with_domain(cookie_domain);
+        .with_name(SESSION_COOKIE_NAME);
+    let session_layer = if cookie_domain.is_empty() {
+        session_layer
+    } else {
+        session_layer.with_domain(cookie_domain)
+    };
 
     let app_state = AppState {
         db: pool,
@@ -215,15 +224,27 @@ async fn main() {
         .route("/feeds/{id}", delete(delete_feed))
         .route("/feeds/{id}/subscription", post(subscribe_feed))
         .route("/feeds/{id}/subscription", delete(unsubscribe_feed))
+        .route("/feeds/{id}/filter", put(settings::set_feed_filter))
+        .route(
+            "/settings",
+            get(settings::get_settings).put(settings::update_settings),
+        )
+        .route(
+            "/settings/llm-key",
+            get(settings::get_llm_key)
+                .put(settings::set_llm_key)
+                .delete(settings::delete_llm_key),
+        )
         .layer(session_layer)
         .layer(cors)
         .with_state(app_state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3001")
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3001".to_string());
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
         .await
         .expect("Failed to bind");
 
-    println!("Users Service running on http://0.0.0.0:3001");
+    println!("Users Service running on http://0.0.0.0:{port}");
 
     axum::serve(
         listener,
@@ -346,7 +367,7 @@ async fn list_subscribed_feeds(
     let feeds = sqlx::query_as!(
         FeedResponse,
         r#"
-        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.created_at,
+        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.full_text, f.created_at,
                COUNT(fs.user_id) as "subscriber_count!"
         FROM feeds f
         JOIN sources s ON f.source_id = s.id
@@ -379,7 +400,7 @@ async fn list_owned_feeds(
     let feeds = sqlx::query_as!(
         FeedResponse,
         r#"
-        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.created_at,
+        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.full_text, f.created_at,
                COUNT(fs.user_id) as "subscriber_count!"
         FROM feeds f
         JOIN sources s ON f.source_id = s.id
@@ -448,6 +469,15 @@ async fn update_feed(
 
     let was_public = feed_record.is_public.unwrap_or(false);
     let is_becoming_private = payload.is_public == Some(false) && was_public;
+    let will_be_public = payload.is_public.unwrap_or(was_public);
+    if will_be_public && payload.full_text == Some(true) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Full text is only available for private feeds".into(),
+            }),
+        ));
+    }
 
     sqlx::query!(
         r#"
@@ -455,13 +485,16 @@ async fn update_feed(
         SET
             title = COALESCE($1, title),
             description = COALESCE($2, description),
-            is_public = COALESCE($3, is_public)
+            is_public = COALESCE($3, is_public),
+            full_text = CASE WHEN COALESCE($3, is_public) THEN false
+                             ELSE COALESCE($5, full_text) END
         WHERE id = $4
         "#,
         payload.title,
         payload.description,
         payload.is_public,
-        feed_id
+        feed_id,
+        payload.full_text
     )
     .execute(&state.db)
     .await
@@ -514,7 +547,7 @@ async fn get_feed(
     let feed = sqlx::query_as!(
         FeedResponse,
         r#"
-        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.created_at,
+        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.full_text, f.created_at,
                COUNT(fs.user_id) as "subscriber_count!"
         FROM feeds f
         JOIN sources s ON f.source_id = s.id
@@ -765,7 +798,7 @@ async fn search_public_feeds(
     let feeds = sqlx::query_as!(
         FeedResponse,
         r#"
-        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.created_at,
+        SELECT f.id, f.owner_id, s.url, f.title, f.description, f.is_public, f.full_text, f.created_at,
                COUNT(fs.user_id) as "subscriber_count!"
         FROM feeds f
         JOIN sources s ON f.source_id = s.id
@@ -810,6 +843,7 @@ async fn list_popular_feeds(
             f.title,
             f.description,
             f.is_public,
+            f.full_text,
             f.created_at,
             COUNT(fs.user_id) as "subscriber_count!"
         FROM feeds f

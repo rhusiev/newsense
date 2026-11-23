@@ -1,7 +1,9 @@
 mod state;
 mod auth;
+mod full_text;
 mod handlers;
 mod models;
+mod ranking;
 mod router;
 mod utils;
 
@@ -36,6 +38,10 @@ async fn main() {
         .await
         .expect("Failed to migrate store");
 
+    let summaries_enabled = std::env::var("LLM_SUMMARIES_ENABLED")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
     let is_dev = cfg!(debug_assertions);
     let is_production = !is_dev;
 
@@ -55,10 +61,12 @@ async fn main() {
         .with_secure(is_production)
         .with_same_site(tower_sessions::cookie::SameSite::Lax)
         .with_expiry(Expiry::OnInactivity(Duration::new(3600, 0)))
-        .with_name(SESSION_COOKIE_NAME)
-        .with_domain(cookie_domain);
-
-    let app_state = AppState { db: pool };
+        .with_name(SESSION_COOKIE_NAME);
+    let session_layer = if cookie_domain.is_empty() {
+        session_layer
+    } else {
+        session_layer.with_domain(cookie_domain)
+    };
 
     let web_url = std::env::var("WEB_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
 
@@ -77,16 +85,21 @@ async fn main() {
         ])
         .allow_credentials(true);
 
+    let app_state = AppState {
+        db: pool.clone(),
+        summaries_enabled,
+    };
     let app = router::routes()
         .layer(session_layer)
         .layer(cors)
         .with_state(app_state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3002")
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3002".to_string());
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
         .await
         .expect("Failed to bind");
 
-    println!("Items Service running on http://0.0.0.0:3002");
+    println!("Items Service running on http://0.0.0.0:{port}");
 
     axum::serve(
         listener,

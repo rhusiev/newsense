@@ -14,6 +14,8 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::sync::{Semaphore, mpsc};
 use uuid::Uuid;
 
+mod full_text;
+
 #[derive(Clone)]
 struct AppState {
     db: PgPool,
@@ -69,6 +71,8 @@ async fn main() {
     tokio::spawn(worker_task(pool.clone(), http_client, valkey_conn, rx));
 
     tokio::spawn(scheduler_task(pool.clone(), tx.clone()));
+
+    tokio::spawn(full_text::full_text_task(pool.clone()));
 
     info!("Error recovery task starting");
     tokio::spawn(error_recovery_task(pool.clone()));

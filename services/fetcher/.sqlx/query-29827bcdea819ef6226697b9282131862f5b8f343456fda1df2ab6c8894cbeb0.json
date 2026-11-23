@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT i.id, i.link\n        FROM items i\n        WHERE i.created_at > NOW() - make_interval(hours => $1)\n          AND NOT EXISTS (SELECT 1 FROM item_full_texts t WHERE t.item_id = i.id)\n          AND EXISTS (SELECT 1 FROM feeds f WHERE f.source_id = i.source_id AND f.full_text)\n          AND NOT EXISTS (SELECT 1 FROM feeds f WHERE f.source_id = i.source_id AND f.is_public)\n        ORDER BY i.created_at\n        LIMIT $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "link",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "29827bcdea819ef6226697b9282131862f5b8f343456fda1df2ab6c8894cbeb0"
+}

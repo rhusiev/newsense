@@ -11,9 +11,11 @@ use crate::{
     models::{
         AllUnreadCountsResponse, ClusterResponse, ClusterStatusResponse, ErrorResponse,
         FeedUnreadCount, GetClustersQuery, GetItemsQuery, GetUnreadCountsQuery, ItemResponse,
-        MarkAllReadRequest, MarkAllReadResponse, ReadStatusResponse, UnreadCountResponse,
-        UpdateItemStatusRequest,
+        MarkAllReadRequest, MarkAllReadResponse, ReadStatusResponse, StorySummaryResponse,
+        StorySummaryStatusResponse, ThreadBriefResponse, ThreadResponse, ThreadStoryResponse,
+        UnreadCountResponse, UpdateItemStatusRequest,
     },
+    ranking,
     state::AppState,
 };
 
@@ -54,6 +56,12 @@ pub async fn get_feed_items(
         ));
     }
 
+    if let Some(top_n) = params.top_n {
+        return ranking::top_items(&state, user_id, top_n, Some(feed_id), &params.ranked())
+            .await
+            .map(Json);
+    }
+
     let limit = params.limit.unwrap_or(50).min(1000);
     let unread_only = params.unread_only.unwrap_or(false);
 
@@ -68,7 +76,7 @@ pub async fn get_feed_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ROUND(ir.liked)::REAL as "liked?",
                     ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN feeds f ON i.source_id = f.source_id
@@ -100,7 +108,7 @@ pub async fn get_feed_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ROUND(ir.liked)::REAL as "liked?",
                     ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN feeds f ON i.source_id = f.source_id
@@ -132,7 +140,7 @@ pub async fn get_feed_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ROUND(ir.liked)::REAL as "liked?",
                     ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN feeds f ON i.source_id = f.source_id
@@ -163,7 +171,7 @@ pub async fn get_feed_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ROUND(ir.liked)::REAL as "liked?",
                     ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN feeds f ON i.source_id = f.source_id
@@ -194,6 +202,7 @@ pub async fn get_feed_items(
         )
     })?;
 
+    log_impressions(&state, user_id, &story_ids(&items)).await;
     Ok(Json(items))
 }
 
@@ -202,6 +211,11 @@ pub async fn get_all_items(
     AuthUser { id: user_id, .. }: AuthUser,
     Query(params): Query<GetItemsQuery>,
 ) -> Result<Json<Vec<ItemResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    if let Some(top_n) = params.top_n {
+        return ranking::top_items(&state, user_id, top_n, None, &params.ranked())
+            .await
+            .map(Json);
+    }
     let limit = params.limit.unwrap_or(50).min(1000);
     let unread_only = params.unread_only.unwrap_or(false);
 
@@ -216,7 +230,7 @@ pub async fn get_all_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ROUND(ir.liked)::REAL as "liked?",
                     ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN sources s ON i.source_id = s.id
@@ -244,7 +258,7 @@ pub async fn get_all_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ROUND(ir.liked)::REAL as "liked?",
                     ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN sources s ON i.source_id = s.id
@@ -272,7 +286,7 @@ pub async fn get_all_items(
                     i.title, i.link, i.content, i.author,
                     i.published_at, i.cluster_id, i.created_at,
                     ir.is_read as "is_read?",
-                    ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+                    ROUND(ir.liked)::REAL as "liked?",
                     ip.score as "prediction_score?"
                 FROM items i
                 INNER JOIN sources s ON i.source_id = s.id
@@ -293,6 +307,7 @@ pub async fn get_all_items(
     }
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
+    log_impressions(&state, user_id, &story_ids(&items)).await;
     Ok(Json(items))
 }
 
@@ -338,19 +353,20 @@ pub async fn update_item_status(
         ReadStatusResponse,
         r#"
         INSERT INTO item_reads (user_id, item_id, is_read, liked)
-        VALUES ($1, $2, COALESCE($3::BOOLEAN, true), COALESCE($4::REAL, 0.0))
+        VALUES ($1, $2, COALESCE($3::BOOLEAN, true), $4::REAL)
         ON CONFLICT (user_id, item_id)
         DO UPDATE SET
             is_read = COALESCE($3::BOOLEAN, item_reads.is_read),
-            liked = COALESCE($4::REAL, item_reads.liked),
+            liked = CASE WHEN $5::BOOLEAN THEN $4::REAL ELSE item_reads.liked END,
             marked_at = CURRENT_TIMESTAMP
         RETURNING
-            user_id, item_id, is_read, ROUND(liked)::REAL as "liked!", marked_at
+            user_id, item_id, is_read, ROUND(liked)::REAL as "liked?", marked_at
         "#,
         user_id,
         item_id,
         payload.is_read,
-        payload.liked
+        payload.liked.flatten(),
+        payload.liked.is_some()
     )
     .fetch_one(&state.db)
     .await
@@ -406,16 +422,18 @@ pub async fn mark_feed_items_read(
     let result = sqlx::query!(
         r#"
         INSERT INTO item_reads (user_id, item_id, is_read, liked, marked_at)
-        SELECT $1, i.id, true, 0.0, CURRENT_TIMESTAMP
+        SELECT $1, i.id, true, NULL::REAL, CURRENT_TIMESTAMP
         FROM items i
         INNER JOIN feeds f ON i.source_id = f.source_id
         WHERE f.id = $2 AND i.published_at >= $3
+          AND ($4::TIMESTAMPTZ IS NULL OR i.published_at < $4)
         ON CONFLICT (user_id, item_id)
         DO UPDATE SET is_read = true, marked_at = CURRENT_TIMESTAMP
         "#,
         user_id,
         feed_id,
-        payload.since
+        payload.since,
+        payload.before
     )
     .execute(&state.db)
     .await
@@ -441,18 +459,20 @@ pub async fn mark_all_items_read(
     let result = sqlx::query!(
         r#"
         INSERT INTO item_reads (user_id, item_id, is_read, liked, marked_at)
-        SELECT DISTINCT $1::UUID, i.id, true, 0.0, CURRENT_TIMESTAMP
+        SELECT DISTINCT $1::UUID, i.id, true, NULL::REAL, CURRENT_TIMESTAMP
         FROM items i
         INNER JOIN sources s ON i.source_id = s.id
         INNER JOIN feeds f ON f.source_id = s.id
         LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id
         WHERE (f.owner_id = $1 OR fs.user_id = $1)
           AND i.published_at >= $2
+          AND ($3::TIMESTAMPTZ IS NULL OR i.published_at < $3)
         ON CONFLICT (user_id, item_id)
         DO UPDATE SET is_read = true, marked_at = CURRENT_TIMESTAMP
         "#,
         user_id,
-        payload.since
+        payload.since,
+        payload.before
     )
     .execute(&state.db)
     .await
@@ -507,6 +527,19 @@ pub async fn get_feed_unread_count(
         ));
     }
 
+    if let Some(top_n) = params.top_n {
+        let unread_count = ranking::count_unread_top(
+            &state,
+            user_id,
+            top_n,
+            &params.ranked(),
+            Some(feed_id),
+            false,
+        )
+        .await?;
+        return Ok(Json(UnreadCountResponse { unread_count }));
+    }
+
     let count = sqlx::query!(
         r#"
         SELECT COUNT(DISTINCT i.id) as "count!"
@@ -544,6 +577,12 @@ pub async fn get_all_unread_count(
     AuthUser { id: user_id, .. }: AuthUser,
     Query(params): Query<GetUnreadCountsQuery>,
 ) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if let Some(top_n) = params.top_n {
+        let unread_count =
+            ranking::count_unread_top(&state, user_id, top_n, &params.ranked(), None, false)
+                .await?;
+        return Ok(Json(UnreadCountResponse { unread_count }));
+    }
     let count = sqlx::query!(
         r#"
         SELECT COUNT(DISTINCT i.id) as "count!"
@@ -639,6 +678,12 @@ pub async fn get_clusters(
     AuthUser { id: user_id, .. }: AuthUser,
     Query(params): Query<GetClustersQuery>,
 ) -> Result<Json<Vec<ClusterResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    if let Some(top_n) = params.top_n {
+        // `feed_id` here is unchecked, so the ranked list stays on subscribed feeds.
+        return ranking::top_clusters(&state, user_id, top_n, None, &params)
+            .await
+            .map(Json);
+    }
     let limit = params.limit.unwrap_or(50).min(100);
     let unread_only = params.unread_only.unwrap_or(false);
 
@@ -675,7 +720,7 @@ pub async fn get_clusters(
             i.title, i.link, i.content, i.author,
             i.published_at, i.cluster_id, i.created_at,
             ir.is_read as "is_read?",
-            ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+            ROUND(ir.liked)::REAL as "liked?",
             ip.score as "prediction_score?"
         FROM items i
         INNER JOIN sources s ON i.source_id = s.id
@@ -701,49 +746,400 @@ pub async fn get_clusters(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
-    let mut cluster_map: HashMap<Uuid, Vec<ItemResponse>> = HashMap::new();
-    let mut singletons: Vec<ItemResponse> = Vec::new();
-
-    for item in rows {
-        if let Some(cid) = item.cluster_id {
-            cluster_map.entry(cid).or_default().push(item);
-        } else {
-            singletons.push(item);
-        }
-    }
-
-    let mut result: Vec<ClusterResponse> = Vec::new();
-
-    for (cid, items) in cluster_map {
-        let mut sorted_items = items;
-        sorted_items.sort_by(|a, b| b.published_at.cmp(&a.published_at));
-
-        let max_date = sorted_items.first().and_then(|i| i.published_at);
-
-        result.push(ClusterResponse {
-            id: cid,
-            is_cluster: true,
-            sort_date: max_date,
-            items: sorted_items,
-        });
-    }
-
-    for item in singletons {
-        result.push(ClusterResponse {
-            id: item.id,
-            is_cluster: false,
-            sort_date: item.published_at,
-            items: vec![item],
-        });
-    }
-
-    result.sort_by(|a, b| b.sort_date.cmp(&a.sort_date));
-
-    Ok(Json(result))
+    let clusters = group_clusters(rows);
+    log_impressions(
+        &state,
+        user_id,
+        &clusters.iter().map(|c| c.id).collect::<Vec<_>>(),
+    )
+    .await;
+    Ok(Json(clusters))
 }
 
-pub async fn update_cluster_status(
+/// One item for the reader, including its per-user state.
+pub async fn get_item(
     State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+    Path(item_id): Path<Uuid>,
+) -> Result<Json<ItemResponse>, (StatusCode, Json<ErrorResponse>)> {
+    sqlx::query_as!(
+        ItemResponse,
+        r#"
+        SELECT i.id as "id!",
+               ARRAY[f.id] as "feed_ids!",
+               i.title, i.link, i.content, i.author,
+               i.published_at, i.cluster_id, i.created_at,
+               ir.is_read as "is_read?",
+               ROUND(ir.liked)::REAL as "liked?",
+               ip.score as "prediction_score?"
+        FROM items i
+        JOIN sources s ON i.source_id = s.id
+        JOIN feeds f ON f.source_id = s.id
+        LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2
+        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $2
+        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $2
+        WHERE i.id = $1 AND (f.is_public OR f.owner_id = $2 OR fs.user_id = $2)
+        "#,
+        item_id,
+        user_id,
+    )
+    .fetch_one(&state.db)
+    .await
+    .map(Json)
+    .map_err(|e| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse { error: e.to_string() }),
+        )
+    })
+}
+
+/// Storylines visible to the viewer, newest first.
+pub async fn list_threads(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+) -> Result<Json<Vec<ThreadBriefResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let threads = sqlx::query_as!(
+        ThreadBriefResponse,
+        r#"
+        WITH cluster_state AS (
+            SELECT c.id, c.thread_id,
+                   MIN(i.published_at) AS first_date,
+                   MAX(i.published_at) AS last_date,
+                   BOOL_AND(COALESCE(ir.is_read, false)) AS is_read,
+                   (array_agg(i.title ORDER BY i.published_at))[1] AS first_title
+            FROM clusters c
+            JOIN items i ON i.cluster_id = c.id
+            JOIN feeds f ON f.source_id = i.source_id
+            LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $1
+            LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $1
+            WHERE c.thread_id IS NOT NULL
+              AND (f.is_public OR f.owner_id = $1 OR fs.user_id = $1)
+            GROUP BY c.id, c.thread_id
+        )
+        SELECT thread_id as "id!",
+               (array_agg(first_title ORDER BY first_date))[1] as "title!",
+               MIN(first_date) as "first_date!",
+               MAX(last_date) as "last_date!",
+               COUNT(*)::bigint as "story_count!",
+               COUNT(*) FILTER (WHERE NOT is_read)::bigint as "unread_count!"
+        FROM cluster_state
+        GROUP BY thread_id
+        ORDER BY MAX(last_date) DESC
+        LIMIT 50
+        "#,
+        user_id,
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )
+    })?;
+    Ok(Json(threads))
+}
+
+async fn thread_response(
+    db: &sqlx::PgPool,
+    thread_id: Uuid,
+    user_id: Uuid,
+) -> Result<ThreadResponse, (StatusCode, Json<ErrorResponse>)> {
+    let stories = sqlx::query_as!(
+        ThreadStoryResponse,
+        r#"
+        SELECT c.id as "id!",
+               (array_agg(i.id ORDER BY i.published_at))[1] as "item_id!",
+               COALESCE((array_agg(i.title ORDER BY i.published_at))[1], c.title_summary)
+                   as "title!",
+               MIN(i.published_at) as "sort_date!",
+               COUNT(DISTINCT i.id)::bigint as "item_count!",
+               BOOL_AND(COALESCE(ir.is_read, false)) as "is_read!",
+               MAX(ROUND(ir.liked))::REAL as "liked?"
+        FROM clusters c
+        JOIN items i ON i.cluster_id = c.id
+        JOIN feeds f ON f.source_id = i.source_id
+        LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2
+        LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $2
+        WHERE c.thread_id = $1
+          AND (f.is_public OR f.owner_id = $2 OR fs.user_id = $2)
+        GROUP BY c.id, c.title_summary
+        ORDER BY MIN(i.published_at) ASC
+        "#,
+        thread_id,
+        user_id,
+    )
+    .fetch_all(db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )
+    })?;
+    let title = stories
+        .first()
+        .map(|story| story.title.clone())
+        .unwrap_or_default();
+    Ok(ThreadResponse {
+        id: thread_id,
+        title,
+        stories,
+    })
+}
+
+/// A thread by its id, for the briefing cards.
+pub async fn get_thread(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+    Path(thread_id): Path<Uuid>,
+) -> Result<Json<ThreadResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let found = sqlx::query_scalar!(
+        r#"
+        SELECT 1
+        FROM clusters c
+        JOIN items i ON i.cluster_id = c.id
+        JOIN feeds f ON f.source_id = i.source_id
+        LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2
+        WHERE c.thread_id = $1
+          AND (f.is_public OR f.owner_id = $2 OR fs.user_id = $2)
+        LIMIT 1
+        "#,
+        thread_id,
+        user_id,
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )
+    })?;
+    if found.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse { error: "Thread not found".to_string() }),
+        ));
+    }
+    thread_response(&state.db, thread_id, user_id).await.map(Json)
+}
+
+/// The timeline of the thread containing one story.
+pub async fn get_story_thread(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+    Path(story_id): Path<Uuid>,
+) -> Result<Json<ThreadResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let thread_id = sqlx::query_scalar!(
+        r#"
+        SELECT c.thread_id
+        FROM clusters c
+        JOIN items i ON i.cluster_id = c.id
+        JOIN feeds f ON f.source_id = i.source_id
+        LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $2
+        WHERE c.id = $1 AND c.thread_id IS NOT NULL
+          AND (f.is_public OR f.owner_id = $2 OR fs.user_id = $2)
+        LIMIT 1
+        "#,
+        story_id,
+        user_id,
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )
+    })?
+    .flatten();
+
+    let thread_id = thread_id.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Story has no thread".to_string(),
+            }),
+        )
+    })?;
+    thread_response(&state.db, thread_id, user_id).await.map(Json)
+}
+
+/// The user's cached summary of one story, if the worker has stored it.
+pub async fn get_story_summary(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+    Path(story_id): Path<Uuid>,
+) -> Result<Json<StorySummaryResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if !state.summaries_enabled {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Summaries are not configured".into(),
+            }),
+        ));
+    }
+    let row = sqlx::query!(
+        r#"
+        SELECT summary, model, updated_at
+        FROM story_summaries
+        WHERE user_id = $1 AND story_id = $2 AND summary IS NOT NULL
+        "#,
+        user_id,
+        story_id
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    match row {
+        Some(row) => Ok(Json(StorySummaryResponse {
+            summary: row.summary.unwrap_or_default(),
+            model: row.model,
+            updated_at: row.updated_at,
+        })),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Summary not ready".into(),
+            }),
+        )),
+    }
+}
+
+/// Drop a cached summary so the worker makes a new one; its call counts daily.
+pub async fn refresh_story_summary(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+    Path(story_id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    if !state.summaries_enabled {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Summaries are not configured".into(),
+            }),
+        ));
+    }
+    sqlx::query!(
+        "DELETE FROM story_summaries WHERE user_id = $1 AND story_id = $2",
+        user_id,
+        story_id,
+    )
+    .execute(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Whether the reader can show a summary, is still waiting, or cannot get one.
+pub async fn get_story_summary_status(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+    Path(story_id): Path<Uuid>,
+) -> Result<Json<StorySummaryStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let row = sqlx::query!(
+        r#"
+        WITH settings AS (
+            SELECT llm_summaries, llm_allowed, llm_daily_limit
+            FROM user_settings WHERE user_id = $1
+        ),
+        story AS (
+            SELECT summary, model, updated_at FROM story_summaries
+            WHERE user_id = $1 AND story_id = $2
+        ),
+        eligible AS (
+            SELECT EXISTS (
+                SELECT 1
+                FROM items i
+                JOIN item_full_texts ft ON ft.item_id = i.id AND ft.text IS NOT NULL
+                JOIN feeds f ON f.source_id = i.source_id
+                LEFT JOIN feed_subscriptions fs
+                    ON fs.feed_id = f.id AND fs.user_id = $1
+                WHERE COALESCE(i.cluster_id, i.id) = $2
+                  AND f.full_text AND NOT f.is_public
+                  AND (f.owner_id = $1 OR fs.user_id = $1)
+            ) AS ok
+        ),
+        latest AS (
+            SELECT MAX(ft.fetched_at) AS fetched_at
+            FROM items i
+            JOIN item_full_texts ft ON ft.item_id = i.id AND ft.text IS NOT NULL
+            WHERE COALESCE(i.cluster_id, i.id) = $2
+        ),
+        usage AS (
+            SELECT COUNT(*)::bigint AS used FROM llm_calls
+            WHERE user_id = $1 AND created_at >= date_trunc('day', now())
+        )
+        SELECT
+            s.llm_summaries AS "summaries!",
+            s.llm_allowed AS "allowed!",
+            s.llm_daily_limit AS "daily_limit!",
+            (SELECT summary FROM story) AS summary,
+            (SELECT model FROM story) AS model,
+            (SELECT updated_at FROM story) AS updated_at,
+            e.ok AS "eligible!",
+            COALESCE(l.fetched_at > (SELECT updated_at FROM story), false) AS "stale!",
+            u.used AS "used!"
+        FROM settings s
+        CROSS JOIN eligible e
+        CROSS JOIN latest l
+        CROSS JOIN usage u
+        "#,
+        user_id,
+        story_id,
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    let applicable = state.summaries_enabled
+        && row.summaries
+        && row.allowed
+        && row.eligible;
+    let ready = row.summary.is_some();
+    Ok(Json(StorySummaryStatusResponse {
+        status: if !applicable {
+            "not-applicable"
+        } else if ready {
+            "ready"
+        } else {
+            "pending"
+        }
+        .to_string(),
+        summary: row.summary,
+        model: row.model,
+        updated_at: row.updated_at,
+        can_recreate: applicable && ready && row.stale,
+        used_today: row.used,
+        daily_limit: row.daily_limit,
+    }))
+}
+
+pub async fn update_cluster_status(    State(state): State<AppState>,
     AuthUser { id: user_id, .. }: AuthUser,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateItemStatusRequest>,
@@ -753,21 +1149,26 @@ pub async fn update_cluster_status(
         WITH target_items AS (
             SELECT i.id
             FROM items i
-            WHERE i.cluster_id = $2 OR (i.cluster_id IS NULL AND i.id = $2)
+            JOIN sources s ON i.source_id = s.id
+            JOIN feeds f ON f.source_id = s.id
+            LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $1
+            WHERE (i.cluster_id = $2 OR (i.cluster_id IS NULL AND i.id = $2))
+              AND (f.is_public OR f.owner_id = $1 OR fs.user_id = $1)
         )
         INSERT INTO item_reads (user_id, item_id, is_read, liked, marked_at)
-        SELECT $1, id, COALESCE($3::BOOLEAN, true), COALESCE($4::REAL, 0.0), CURRENT_TIMESTAMP
+        SELECT $1, id, COALESCE($3::BOOLEAN, true), $4::REAL, CURRENT_TIMESTAMP
         FROM target_items
         ON CONFLICT (user_id, item_id)
         DO UPDATE SET
             is_read = COALESCE($3::BOOLEAN, item_reads.is_read),
-            liked = COALESCE($4::REAL, item_reads.liked),
+            liked = CASE WHEN $5::BOOLEAN THEN $4::REAL ELSE item_reads.liked END,
             marked_at = CURRENT_TIMESTAMP
         "#,
         user_id,
         id,
         payload.is_read,
-        payload.liked
+        payload.liked.flatten(),
+        payload.liked.is_some()
     )
     .execute(&state.db)
     .await
@@ -783,15 +1184,98 @@ pub async fn update_cluster_status(
     Ok(Json(ClusterStatusResponse {
         updated_items: result.rows_affected() as i64,
         is_read: payload.is_read.unwrap_or(true),
-        liked: payload.liked.unwrap_or(0.0),
+        liked: payload.liked.flatten(),
+    }))
+}
+
+pub async fn get_feed_cluster_unread_count(
+    State(state): State<AppState>,
+    AuthUser { id: user_id, .. }: AuthUser,
+    Path(feed_id): Path<Uuid>,
+    Query(params): Query<GetClustersQuery>,
+) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let has_access = sqlx::query!(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM feeds f
+            LEFT JOIN feed_subscriptions fs ON f.id = fs.feed_id AND fs.user_id = $1
+            WHERE f.id = $2 AND (f.is_public OR f.owner_id = $1 OR fs.user_id = $1)
+        ) as "has_access!"
+        "#,
+        user_id,
+        feed_id
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if !has_access.has_access {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Feed not found".into(),
+            }),
+        ));
+    }
+
+    if let Some(top_n) = params.top_n {
+        let unread_count =
+            ranking::count_unread_top(&state, user_id, top_n, &params, Some(feed_id), true)
+                .await?;
+        return Ok(Json(UnreadCountResponse { unread_count }));
+    }
+
+    let count = sqlx::query!(
+        r#"
+        SELECT COUNT(DISTINCT COALESCE(i.cluster_id, i.id)) as "count!"
+        FROM items i
+        INNER JOIN sources s ON i.source_id = s.id
+        INNER JOIN feeds f ON f.source_id = s.id
+        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
+        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
+        WHERE f.id = $2
+          AND (ir.is_read IS NULL OR ir.is_read = false)
+          AND ($3::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $3)
+          AND ($4::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $4)
+        "#,
+        user_id,
+        feed_id,
+        params.score_min,
+        params.score_max
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    Ok(Json(UnreadCountResponse {
+        unread_count: count.count,
     }))
 }
 
 pub async fn get_cluster_unread_count(
     State(state): State<AppState>,
     AuthUser { id: user_id, .. }: AuthUser,
-    Query(params): Query<GetUnreadCountsQuery>,
+    Query(params): Query<GetClustersQuery>,
 ) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if let Some(top_n) = params.top_n {
+        let unread_count =
+            ranking::count_unread_top(&state, user_id, top_n, &params, None, true).await?;
+        return Ok(Json(UnreadCountResponse { unread_count }));
+    }
     let count = sqlx::query!(
         r#"
         SELECT COUNT(DISTINCT COALESCE(i.cluster_id, i.id)) as "count!"
@@ -863,6 +1347,12 @@ pub async fn get_feed_clusters(
         ));
     }
 
+    if let Some(top_n) = params.top_n {
+        return ranking::top_clusters(&state, user_id, top_n, Some(feed_id), &params)
+            .await
+            .map(Json);
+    }
+
     let limit = params.limit.unwrap_or(50).min(100);
     let unread_only = params.unread_only.unwrap_or(false);
 
@@ -896,7 +1386,7 @@ pub async fn get_feed_clusters(
             i.title, i.link, i.content, i.author,
             i.published_at, i.cluster_id, i.created_at,
             ir.is_read as "is_read?",
-            ROUND(COALESCE(ir.liked, 0.0))::REAL as "liked?",
+            ROUND(ir.liked)::REAL as "liked?",
             ip.score as "prediction_score?"
         FROM items i
         INNER JOIN sources s ON i.source_id = s.id
@@ -922,44 +1412,14 @@ pub async fn get_feed_clusters(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
-    let mut cluster_map: HashMap<Uuid, Vec<ItemResponse>> = HashMap::new();
-    let mut singletons: Vec<ItemResponse> = Vec::new();
-
-    for item in rows {
-        if let Some(cid) = item.cluster_id {
-            cluster_map.entry(cid).or_default().push(item);
-        } else {
-            singletons.push(item);
-        }
-    }
-
-    let mut result: Vec<ClusterResponse> = Vec::new();
-
-    for (cid, items) in cluster_map {
-        let mut sorted_items = items;
-        sorted_items.sort_by(|a, b| b.published_at.cmp(&a.published_at));
-        let max_date = sorted_items.first().and_then(|i| i.published_at);
-
-        result.push(ClusterResponse {
-            id: cid,
-            is_cluster: true,
-            sort_date: max_date,
-            items: sorted_items,
-        });
-    }
-
-    for item in singletons {
-        result.push(ClusterResponse {
-            id: item.id,
-            is_cluster: false,
-            sort_date: item.published_at,
-            items: vec![item],
-        });
-    }
-
-    result.sort_by(|a, b| b.sort_date.cmp(&a.sort_date));
-
-    Ok(Json(result))
+    let clusters = group_clusters(rows);
+    log_impressions(
+        &state,
+        user_id,
+        &clusters.iter().map(|c| c.id).collect::<Vec<_>>(),
+    )
+    .await;
+    Ok(Json(clusters))
 }
 
 pub async fn mark_feed_clusters_read(
@@ -1006,9 +1466,10 @@ pub async fn mark_feed_clusters_read(
             FROM items i
             INNER JOIN feeds f ON i.source_id = f.source_id
             WHERE f.id = $2 AND i.published_at >= $3
+              AND ($4::TIMESTAMPTZ IS NULL OR i.published_at < $4)
         )
         INSERT INTO item_reads (user_id, item_id, is_read, liked, marked_at)
-        SELECT DISTINCT $1::uuid, i.id, true, 0.0, CURRENT_TIMESTAMP
+        SELECT DISTINCT $1::uuid, i.id, true, NULL::REAL, CURRENT_TIMESTAMP
         FROM items i
         WHERE
             (i.cluster_id IS NULL AND i.id IN (SELECT id FROM target_scope))
@@ -1019,7 +1480,8 @@ pub async fn mark_feed_clusters_read(
         "#,
         user_id,
         feed_id,
-        payload.since
+        payload.since,
+        payload.before
     )
     .execute(&state.db)
     .await
@@ -1035,4 +1497,67 @@ pub async fn mark_feed_clusters_read(
     Ok(Json(MarkAllReadResponse {
         marked_count: result.rows_affected() as i64,
     }))
+}
+
+/// The story of each item: its cluster, or the item itself.
+pub(crate) fn story_ids(items: &[ItemResponse]) -> Vec<Uuid> {
+    items
+        .iter()
+        .map(|item| item.cluster_id.unwrap_or(item.id))
+        .collect()
+}
+
+/// Records the stories shown in a list. Best effort: a failed insert must not
+/// fail the read.
+pub(crate) async fn log_impressions(state: &AppState, user_id: Uuid, story_ids: &[Uuid]) {
+    if story_ids.is_empty() {
+        return;
+    }
+    let result = sqlx::query!(
+        r#"
+        INSERT INTO story_impressions (user_id, story_id)
+        SELECT $1, story_id FROM UNNEST($2::uuid[]) AS t(story_id)
+        ON CONFLICT (user_id, story_id) DO NOTHING
+        "#,
+        user_id,
+        story_ids
+    )
+    .execute(&state.db)
+    .await;
+    if let Err(e) = result {
+        eprintln!("story impressions: {e}");
+    }
+}
+
+/// Groups item rows into cluster cards, newest first. Singletons become one-item cards.
+pub fn group_clusters(rows: Vec<ItemResponse>) -> Vec<ClusterResponse> {
+    let mut cluster_map: HashMap<Uuid, Vec<ItemResponse>> = HashMap::new();
+    let mut result: Vec<ClusterResponse> = Vec::new();
+
+    for item in rows {
+        match item.cluster_id {
+            Some(cid) => cluster_map.entry(cid).or_default().push(item),
+            None => result.push(ClusterResponse {
+                id: item.id,
+                is_cluster: false,
+                sort_date: item.published_at,
+                explored: false,
+                items: vec![item],
+            }),
+        }
+    }
+
+    for (cid, mut items) in cluster_map {
+        items.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+        result.push(ClusterResponse {
+            id: cid,
+            is_cluster: true,
+            sort_date: items.first().and_then(|i| i.published_at),
+            explored: false,
+            items,
+        });
+    }
+
+    result.sort_by(|a, b| b.sort_date.cmp(&a.sort_date));
+    result
 }

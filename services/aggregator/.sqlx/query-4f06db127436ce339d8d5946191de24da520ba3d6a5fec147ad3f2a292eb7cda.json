@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO story_impressions (user_id, story_id)\n        SELECT $1, story_id FROM UNNEST($2::uuid[]) AS t(story_id)\n        ON CONFLICT (user_id, story_id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4f06db127436ce339d8d5946191de24da520ba3d6a5fec147ad3f2a292eb7cda"
+}
