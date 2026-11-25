@@ -429,9 +429,12 @@ async fn fetch_items(
             ip.score as "prediction_score?"
         FROM items i
         INNER JOIN feeds f ON f.source_id = i.source_id
+        LEFT JOIN feed_subscriptions vfs ON vfs.feed_id = f.id AND vfs.user_id = $1
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE (CASE WHEN $3::boolean THEN COALESCE(i.cluster_id, i.id) ELSE i.id END) = ANY($2::uuid[])
+          -- A story spans sources; show only the members this user may see.
+          AND (f.is_public OR f.owner_id = $1 OR vfs.user_id IS NOT NULL)
         GROUP BY i.id, ir.is_read, ir.liked, ip.score
         ORDER BY
             CASE WHEN $4::boolean THEN i.published_at END ASC,

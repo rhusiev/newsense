@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            i.id as \"id!\",\n            array_agg(f.id) as \"feed_ids!\",\n            i.title, i.link, i.content, i.author,\n            i.published_at, i.cluster_id, i.created_at,\n            ir.is_read as \"is_read?\",\n            ROUND(ir.liked)::REAL as \"liked?\",\n            ip.score as \"prediction_score?\"\n        FROM items i\n        INNER JOIN feeds f ON f.source_id = i.source_id\n        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n        WHERE (CASE WHEN $3::boolean THEN COALESCE(i.cluster_id, i.id) ELSE i.id END) = ANY($2::uuid[])\n        GROUP BY i.id, ir.is_read, ir.liked, ip.score\n        ORDER BY\n            CASE WHEN $4::boolean THEN i.published_at END ASC,\n            CASE WHEN NOT $4::boolean THEN i.published_at END DESC\n        ",
+  "query": "\n        SELECT\n            i.id as \"id!\",\n            array_agg(f.id) as \"feed_ids!\",\n            i.title, i.link, i.content, i.author,\n            i.published_at, i.cluster_id, i.created_at,\n            ir.is_read as \"is_read?\",\n            ROUND(ir.liked)::REAL as \"liked?\",\n            ip.score as \"prediction_score?\"\n        FROM items i\n        INNER JOIN feeds f ON f.source_id = i.source_id\n        LEFT JOIN feed_subscriptions vfs ON vfs.feed_id = f.id AND vfs.user_id = $1\n        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n        WHERE (CASE WHEN $3::boolean THEN COALESCE(i.cluster_id, i.id) ELSE i.id END) = ANY($2::uuid[])\n          -- A story spans sources; show only the members this user may see.\n          AND (f.is_public OR f.owner_id = $1 OR vfs.user_id IS NOT NULL)\n        GROUP BY i.id, ir.is_read, ir.liked, ip.score\n        ORDER BY\n            CASE WHEN $4::boolean THEN i.published_at END ASC,\n            CASE WHEN NOT $4::boolean THEN i.published_at END DESC\n        ",
   "describe": {
     "columns": [
       {
@@ -87,5 +87,5 @@
       false
     ]
   },
-  "hash": "05d5d8a73629272819e96dce84ad315e93e1045c3d47a1585a2df019c8453549"
+  "hash": "8492cb0009193ca7400b4a0c5ceed9c7be2b22a81fc6fddfda94f894fc536167"
 }

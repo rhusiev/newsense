@@ -598,12 +598,14 @@ pub async fn get_clusters(
             ROUND(ir.liked)::REAL as "liked?",
             ip.score as "prediction_score?"
         FROM items i
-        INNER JOIN sources s ON i.source_id = s.id
-        INNER JOIN feeds f ON f.source_id = s.id
+        INNER JOIN feeds f ON f.source_id = i.source_id
+        LEFT JOIN feed_subscriptions vfs ON vfs.feed_id = f.id AND vfs.user_id = $1
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE
             COALESCE(i.cluster_id, i.id) IN (SELECT entity_id FROM anchor_entities)
+            -- A story spans sources; show only the members this user may see.
+            AND (f.is_public OR f.owner_id = $1 OR vfs.user_id IS NOT NULL)
             AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $6)
             AND ($7::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $7)
         GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
@@ -730,8 +732,7 @@ async fn thread_response(
         r#"
         SELECT c.id as "id!",
                (array_agg(i.id ORDER BY i.published_at))[1] as "item_id!",
-               COALESCE((array_agg(i.title ORDER BY i.published_at))[1], c.title_summary)
-                   as "title!",
+               (array_agg(i.title ORDER BY i.published_at))[1] as "title!",
                MIN(i.published_at) as "sort_date!",
                COUNT(DISTINCT i.id)::bigint as "item_count!",
                BOOL_AND(COALESCE(ir.is_read, false)) as "is_read!",
@@ -743,7 +744,7 @@ async fn thread_response(
         LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $2
         WHERE c.thread_id = $1
           AND (f.is_public OR f.owner_id = $2 OR fs.user_id = $2)
-        GROUP BY c.id, c.title_summary
+        GROUP BY c.id
         ORDER BY MIN(i.published_at) ASC
         "#,
         thread_id,
@@ -1273,12 +1274,14 @@ pub async fn get_feed_clusters(
             ROUND(ir.liked)::REAL as "liked?",
             ip.score as "prediction_score?"
         FROM items i
-        INNER JOIN sources s ON i.source_id = s.id
-        INNER JOIN feeds f ON f.source_id = s.id
+        INNER JOIN feeds f ON f.source_id = i.source_id
+        LEFT JOIN feed_subscriptions vfs ON vfs.feed_id = f.id AND vfs.user_id = $1
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE
             COALESCE(i.cluster_id, i.id) IN (SELECT entity_id FROM anchor_entities)
+            -- A story spans sources; show only the members this user may see.
+            AND (f.is_public OR f.owner_id = $1 OR vfs.user_id IS NOT NULL)
             AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $6)
             AND ($7::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $7)
         GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
