@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            i.id as \"id!\",\n            ARRAY[$2::uuid] as \"feed_ids!\",\n            i.title, i.link, i.content, i.author,\n            i.published_at, i.cluster_id, i.created_at,\n            ir.is_read as \"is_read?\",\n            ROUND(ir.liked)::REAL as \"liked?\",\n            ip.score as \"prediction_score?\"\n        FROM items i\n        INNER JOIN feeds f ON i.source_id = f.source_id\n        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n        WHERE f.id = $2\n          AND ($3::boolean = false OR (ir.is_read IS NULL OR ir.is_read = false))\n          AND ($4::timestamptz IS NULL OR i.published_at < $4)\n          AND ($5::timestamptz IS NULL OR i.published_at > $5)\n          AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $6)\n          AND ($7::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $7)\n        ORDER BY\n            CASE WHEN $8::boolean THEN i.published_at END ASC,\n            CASE WHEN NOT $8::boolean THEN i.published_at END DESC\n        LIMIT $9\n        ",
+  "query": "\n        SELECT\n            i.id as \"id!\",\n            array_agg(f.id) as \"feed_ids!\",\n            i.title, i.link, i.content, i.author,\n            i.published_at, i.cluster_id, i.created_at,\n            ir.is_read as \"is_read?\",\n            ROUND(ir.liked)::REAL as \"liked?\",\n            ip.score as \"prediction_score?\"\n        FROM items i\n        INNER JOIN feeds f ON f.source_id = i.source_id\n        LEFT JOIN feed_subscriptions vfs ON vfs.feed_id = f.id AND vfs.user_id = $1\n        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n        WHERE (CASE WHEN $3::boolean THEN COALESCE(i.cluster_id, i.id) ELSE i.id END) = ANY($2::uuid[])\n          -- A story spans sources; show only the members this user may see.\n          AND (f.is_public OR f.owner_id = $1 OR vfs.user_id IS NOT NULL)\n        GROUP BY i.id, ir.is_read, ir.liked, ip.score\n        ORDER BY\n            CASE WHEN $4::boolean THEN i.published_at END ASC,\n            CASE WHEN $4::boolean THEN i.id END ASC,\n            CASE WHEN NOT $4::boolean THEN i.published_at END DESC,\n            CASE WHEN NOT $4::boolean THEN i.id END DESC\n        ",
   "describe": {
     "columns": [
       {
@@ -67,14 +67,9 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Uuid",
+        "UuidArray",
         "Bool",
-        "Timestamptz",
-        "Timestamptz",
-        "Float4",
-        "Float4",
-        "Bool",
-        "Int8"
+        "Bool"
       ]
     },
     "nullable": [
@@ -92,5 +87,5 @@
       false
     ]
   },
-  "hash": "116317dd970209b1b6a68b9f6fc4fc348c8eb682526a60a07ffb04f2fca6a177"
+  "hash": "be831edbeca57789faba7bb70f8b78e85bec3dc48465b6a69b92c0d6f9167f27"
 }

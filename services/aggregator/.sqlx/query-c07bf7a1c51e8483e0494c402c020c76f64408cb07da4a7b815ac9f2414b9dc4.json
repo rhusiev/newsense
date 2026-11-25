@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            i.id as \"id!\",\n            array_agg(f.id) as \"feed_ids!\",\n            i.title, i.link, i.content, i.author,\n            i.published_at, i.cluster_id, i.created_at,\n            ir.is_read as \"is_read?\",\n            ROUND(ir.liked)::REAL as \"liked?\",\n            ip.score as \"prediction_score?\"\n        FROM items i\n        INNER JOIN sources s ON i.source_id = s.id\n        INNER JOIN feeds f ON f.source_id = s.id\n        INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id\n        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n        WHERE fs.user_id = $1\n          AND ($2::boolean = false OR (ir.is_read IS NULL OR ir.is_read = false))\n          AND ($3::timestamptz IS NULL OR i.published_at < $3)\n          AND ($4::timestamptz IS NULL OR i.published_at > $4)\n          AND ($5::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $5)\n          AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $6)\n        GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score\n        ORDER BY\n            CASE WHEN $7::boolean THEN i.published_at END ASC,\n            CASE WHEN NOT $7::boolean THEN i.published_at END DESC\n        LIMIT $8\n        ",
+  "query": "\n        SELECT\n            i.id as \"id!\",\n            ARRAY[$2::uuid] as \"feed_ids!\",\n            i.title, i.link, i.content, i.author,\n            i.published_at, i.cluster_id, i.created_at,\n            ir.is_read as \"is_read?\",\n            ROUND(ir.liked)::REAL as \"liked?\",\n            ip.score as \"prediction_score?\"\n        FROM items i\n        INNER JOIN feeds f ON i.source_id = f.source_id\n        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n        WHERE f.id = $2\n          AND ($3::boolean = false OR (ir.is_read IS NULL OR ir.is_read = false))\n          AND ($4::timestamptz IS NULL OR CASE WHEN $8::boolean\n              THEN i.published_at > $4 OR (i.published_at = $4 AND i.id > $5::uuid)\n              ELSE i.published_at < $4 OR (i.published_at = $4 AND i.id < $5::uuid) END)\n          AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $6)\n          AND ($7::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $7)\n        ORDER BY\n            CASE WHEN $8::boolean THEN i.published_at END ASC,\n            CASE WHEN $8::boolean THEN i.id END ASC,\n            CASE WHEN NOT $8::boolean THEN i.published_at END DESC,\n            CASE WHEN NOT $8::boolean THEN i.id END DESC\n        LIMIT $9\n        ",
   "describe": {
     "columns": [
       {
@@ -67,9 +67,10 @@
     "parameters": {
       "Left": [
         "Uuid",
+        "Uuid",
         "Bool",
         "Timestamptz",
-        "Timestamptz",
+        "Uuid",
         "Float4",
         "Float4",
         "Bool",
@@ -91,5 +92,5 @@
       false
     ]
   },
-  "hash": "db3de7f5e8642a1c8e9b5727f21fadd61ccfc6cec69f90561c399a7bf22110eb"
+  "hash": "c07bf7a1c51e8483e0494c402c020c76f64408cb07da4a7b815ac9f2414b9dc4"
 }

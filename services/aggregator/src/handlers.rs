@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::{
     auth::AuthUser,
     models::{
-        AllUnreadCountsResponse, ClusterResponse, ClusterStatusResponse, ErrorResponse,
+        AllUnreadCountsResponse, ClusterItemRow, ClusterResponse, ClusterStatusResponse, ErrorResponse,
         FeedUnreadCount, GetClustersQuery, GetItemsQuery, GetUnreadCountsQuery, ItemResponse,
         MarkAllReadRequest, MarkAllReadResponse, ReadStatusResponse, StorySummaryResponse,
         StorySummaryStatusResponse, ThreadBriefResponse, ThreadResponse, ThreadStoryResponse,
@@ -18,6 +18,10 @@ use crate::{
     ranking,
     state::AppState,
 };
+
+fn bad_request(error: String) -> (StatusCode, Json<ErrorResponse>) {
+    (StatusCode::BAD_REQUEST, Json(ErrorResponse { error }))
+}
 
 pub async fn get_feed_items(
     State(state): State<AppState>,
@@ -64,10 +68,7 @@ pub async fn get_feed_items(
 
     let limit = params.limit.unwrap_or(50).min(1000);
     let unread_only = params.unread_only.unwrap_or(false);
-    // `since` is the older spelling of `after` and still means oldest-first.
-    let ascending = params.order.unwrap_or_default().ascending() || params.since.is_some();
-    let before = if ascending { None } else { params.before };
-    let after = params.after.or(params.since);
+    let cursor = params.cursor().map_err(bad_request)?;
 
     let items = sqlx::query_as!(
         ItemResponse,
@@ -86,23 +87,26 @@ pub async fn get_feed_items(
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE f.id = $2
           AND ($3::boolean = false OR (ir.is_read IS NULL OR ir.is_read = false))
-          AND ($4::timestamptz IS NULL OR i.published_at < $4)
-          AND ($5::timestamptz IS NULL OR i.published_at > $5)
+          AND ($4::timestamptz IS NULL OR CASE WHEN $8::boolean
+              THEN i.published_at > $4 OR (i.published_at = $4 AND i.id > $5::uuid)
+              ELSE i.published_at < $4 OR (i.published_at = $4 AND i.id < $5::uuid) END)
           AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $6)
           AND ($7::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $7)
         ORDER BY
             CASE WHEN $8::boolean THEN i.published_at END ASC,
-            CASE WHEN NOT $8::boolean THEN i.published_at END DESC
+            CASE WHEN $8::boolean THEN i.id END ASC,
+            CASE WHEN NOT $8::boolean THEN i.published_at END DESC,
+            CASE WHEN NOT $8::boolean THEN i.id END DESC
         LIMIT $9
         "#,
         user_id,
         feed_id,
         unread_only,
-        before,
-        after,
+        cursor.at,
+        cursor.id,
         params.score_min,
         params.score_max,
-        ascending,
+        cursor.ascending,
         limit
     )
     .fetch_all(&state.db)
@@ -132,8 +136,7 @@ pub async fn get_all_items(
     }
     let limit = params.limit.unwrap_or(50).min(1000);
     let unread_only = params.unread_only.unwrap_or(false);
-    let ascending = params.order.unwrap_or_default().ascending();
-    let before = if ascending { None } else { params.before };
+    let cursor = params.cursor().map_err(bad_request)?;
 
     let items = sqlx::query_as!(
         ItemResponse,
@@ -154,23 +157,26 @@ pub async fn get_all_items(
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE fs.user_id = $1
           AND ($2::boolean = false OR (ir.is_read IS NULL OR ir.is_read = false))
-          AND ($3::timestamptz IS NULL OR i.published_at < $3)
-          AND ($4::timestamptz IS NULL OR i.published_at > $4)
+          AND ($3::timestamptz IS NULL OR CASE WHEN $7::boolean
+              THEN i.published_at > $3 OR (i.published_at = $3 AND i.id > $4::uuid)
+              ELSE i.published_at < $3 OR (i.published_at = $3 AND i.id < $4::uuid) END)
           AND ($5::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $5)
           AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $6)
         GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
         ORDER BY
             CASE WHEN $7::boolean THEN i.published_at END ASC,
-            CASE WHEN NOT $7::boolean THEN i.published_at END DESC
+            CASE WHEN $7::boolean THEN i.id END ASC,
+            CASE WHEN NOT $7::boolean THEN i.published_at END DESC,
+            CASE WHEN NOT $7::boolean THEN i.id END DESC
         LIMIT $8
         "#,
         user_id,
         unread_only,
-        before,
-        params.after,
+        cursor.at,
+        cursor.id,
         params.score_min,
         params.score_max,
-        ascending,
+        cursor.ascending,
         limit
     )
     .fetch_all(&state.db)
@@ -556,11 +562,10 @@ pub async fn get_clusters(
     }
     let limit = params.limit.unwrap_or(50).min(100);
     let unread_only = params.unread_only.unwrap_or(false);
-    let ascending = params.order.unwrap_or_default().ascending();
-    let before = if ascending { None } else { params.before };
+    let cursor = params.cursor().map_err(bad_request)?;
 
     let rows = sqlx::query_as!(
-        ItemResponse,
+        ClusterItemRow,
         r#"
         WITH anchor_items AS (
             SELECT i.id, i.cluster_id, i.published_at
@@ -572,21 +577,26 @@ pub async fn get_clusters(
             LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
             WHERE fs.user_id = $1
               AND ($2::uuid IS NULL OR f.id = $2)
-              AND ($3::timestamptz IS NULL OR i.published_at < $3)
-              AND ($8::timestamptz IS NULL OR i.published_at > $8)
               AND ($4::boolean = false OR (ir.is_read IS NULL OR ir.is_read = false))
               AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $6)
               AND ($7::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $7)
         ),
         anchor_entities AS (
-            SELECT
-                COALESCE(cluster_id, id) as entity_id,
-                MAX(published_at) as max_date
+            SELECT COALESCE(cluster_id, id) AS entity_id, MAX(published_at) AS max_date
             FROM anchor_items
             GROUP BY COALESCE(cluster_id, id)
+        ),
+        -- Stories page by their latest matching article, the date they are shown by.
+        page AS (
+            SELECT entity_id, max_date FROM anchor_entities
+            WHERE ($3::timestamptz IS NULL OR CASE WHEN $9::boolean
+                THEN max_date > $3 OR (max_date = $3 AND entity_id > $8::uuid)
+                ELSE max_date < $3 OR (max_date = $3 AND entity_id < $8::uuid) END)
             ORDER BY
-                CASE WHEN $9::boolean THEN MAX(published_at) END ASC,
-                CASE WHEN NOT $9::boolean THEN MAX(published_at) END DESC
+                CASE WHEN $9::boolean THEN max_date END ASC,
+                CASE WHEN $9::boolean THEN entity_id END ASC,
+                CASE WHEN NOT $9::boolean THEN max_date END DESC,
+                CASE WHEN NOT $9::boolean THEN entity_id END DESC
             LIMIT $5
         )
         SELECT
@@ -596,38 +606,36 @@ pub async fn get_clusters(
             i.published_at, i.cluster_id, i.created_at,
             ir.is_read as "is_read?",
             ROUND(ir.liked)::REAL as "liked?",
-            ip.score as "prediction_score?"
+            ip.score as "prediction_score?",
+            p.max_date as "story_date"
         FROM items i
+        INNER JOIN page p ON p.entity_id = COALESCE(i.cluster_id, i.id)
         INNER JOIN feeds f ON f.source_id = i.source_id
         LEFT JOIN feed_subscriptions vfs ON vfs.feed_id = f.id AND vfs.user_id = $1
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE
-            COALESCE(i.cluster_id, i.id) IN (SELECT entity_id FROM anchor_entities)
             -- A story spans sources; show only the members this user may see.
-            AND (f.is_public OR f.owner_id = $1 OR vfs.user_id IS NOT NULL)
+            (f.is_public OR f.owner_id = $1 OR vfs.user_id IS NOT NULL)
             AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $6)
             AND ($7::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $7)
-        GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
-        ORDER BY
-            CASE WHEN $9::boolean THEN i.published_at END ASC,
-            CASE WHEN NOT $9::boolean THEN i.published_at END DESC
+        GROUP BY i.id, ir.is_read, ir.liked, ip.score, p.max_date
         "#,
         user_id,
         params.feed_id,
-        before,
+        cursor.at,
         unread_only,
         limit,
         params.score_min,
         params.score_max,
-        params.after,
-        ascending
+        cursor.id,
+        cursor.ascending
     )
     .fetch_all(&state.db)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
-    let clusters = group_clusters(rows, ascending);
+    let clusters = group_story_rows(rows, cursor.ascending);
     log_impressions(
         &state,
         user_id,
@@ -1251,11 +1259,10 @@ pub async fn get_feed_clusters(
 
     let limit = params.limit.unwrap_or(50).min(100);
     let unread_only = params.unread_only.unwrap_or(false);
-    let ascending = params.order.unwrap_or_default().ascending();
-    let before = if ascending { None } else { params.before };
+    let cursor = params.cursor().map_err(bad_request)?;
 
     let rows = sqlx::query_as!(
-        ItemResponse,
+        ClusterItemRow,
         r#"
         WITH anchor_items AS (
             SELECT i.id, i.cluster_id, i.published_at
@@ -1264,21 +1271,26 @@ pub async fn get_feed_clusters(
             LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
             LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
             WHERE f.id = $2
-              AND ($3::timestamptz IS NULL OR i.published_at < $3)
-              AND ($8::timestamptz IS NULL OR i.published_at > $8)
               AND ($4::boolean = false OR (ir.is_read IS NULL OR ir.is_read = false))
               AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $6)
               AND ($7::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $7)
         ),
         anchor_entities AS (
-            SELECT
-                COALESCE(cluster_id, id) as entity_id,
-                MAX(published_at) as max_date
+            SELECT COALESCE(cluster_id, id) AS entity_id, MAX(published_at) AS max_date
             FROM anchor_items
             GROUP BY COALESCE(cluster_id, id)
+        ),
+        -- Stories page by their latest matching article, the date they are shown by.
+        page AS (
+            SELECT entity_id, max_date FROM anchor_entities
+            WHERE ($3::timestamptz IS NULL OR CASE WHEN $9::boolean
+                THEN max_date > $3 OR (max_date = $3 AND entity_id > $8::uuid)
+                ELSE max_date < $3 OR (max_date = $3 AND entity_id < $8::uuid) END)
             ORDER BY
-                CASE WHEN $9::boolean THEN MAX(published_at) END ASC,
-                CASE WHEN NOT $9::boolean THEN MAX(published_at) END DESC
+                CASE WHEN $9::boolean THEN max_date END ASC,
+                CASE WHEN $9::boolean THEN entity_id END ASC,
+                CASE WHEN NOT $9::boolean THEN max_date END DESC,
+                CASE WHEN NOT $9::boolean THEN entity_id END DESC
             LIMIT $5
         )
         SELECT
@@ -1288,38 +1300,36 @@ pub async fn get_feed_clusters(
             i.published_at, i.cluster_id, i.created_at,
             ir.is_read as "is_read?",
             ROUND(ir.liked)::REAL as "liked?",
-            ip.score as "prediction_score?"
+            ip.score as "prediction_score?",
+            p.max_date as "story_date"
         FROM items i
+        INNER JOIN page p ON p.entity_id = COALESCE(i.cluster_id, i.id)
         INNER JOIN feeds f ON f.source_id = i.source_id
         LEFT JOIN feed_subscriptions vfs ON vfs.feed_id = f.id AND vfs.user_id = $1
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE
-            COALESCE(i.cluster_id, i.id) IN (SELECT entity_id FROM anchor_entities)
             -- A story spans sources; show only the members this user may see.
-            AND (f.is_public OR f.owner_id = $1 OR vfs.user_id IS NOT NULL)
+            (f.is_public OR f.owner_id = $1 OR vfs.user_id IS NOT NULL)
             AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $6)
             AND ($7::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $7)
-        GROUP BY i.id, i.title, i.link, i.content, i.author, i.published_at, i.cluster_id, i.created_at, ir.is_read, ir.liked, ip.score
-        ORDER BY
-            CASE WHEN $9::boolean THEN i.published_at END ASC,
-            CASE WHEN NOT $9::boolean THEN i.published_at END DESC
+        GROUP BY i.id, ir.is_read, ir.liked, ip.score, p.max_date
         "#,
         user_id,
         feed_id,
-        before,
+        cursor.at,
         unread_only,
         limit,
         params.score_min,
         params.score_max,
-        params.after,
-        ascending
+        cursor.id,
+        cursor.ascending
     )
     .fetch_all(&state.db)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
-    let clusters = group_clusters(rows, ascending);
+    let clusters = group_story_rows(rows, cursor.ascending);
     log_impressions(
         &state,
         user_id,
@@ -1436,44 +1446,66 @@ pub(crate) async fn log_impressions(state: &AppState, user_id: Uuid, story_ids: 
     }
 }
 
-/// Groups item rows into cluster cards, newest first. Singletons become one-item cards.
+/// Groups member rows of a story list, keyed by the date each story was paged by.
+fn group_story_rows(rows: Vec<ClusterItemRow>, ascending: bool) -> Vec<ClusterResponse> {
+    let mut dates = HashMap::new();
+    let items = rows
+        .into_iter()
+        .map(|row| {
+            let (item, date) = row.split();
+            if let Some(date) = date {
+                dates.insert(item.cluster_id.unwrap_or(item.id), date);
+            }
+            item
+        })
+        .collect();
+    group_clusters(items, &dates, ascending)
+}
+
+/// Groups item rows into story cards. A card's `sort_date` is its paging date
+/// from `dates`, so the client's cursor matches the server's; the latest member
+/// stands in for a story without one. Singletons become one-item cards.
 pub fn group_clusters(
     rows: Vec<ItemResponse>,
+    dates: &HashMap<Uuid, time::OffsetDateTime>,
     ascending: bool,
 ) -> Vec<ClusterResponse> {
-    let mut cluster_map: HashMap<Uuid, Vec<ItemResponse>> = HashMap::new();
-    let mut result: Vec<ClusterResponse> = Vec::new();
-
+    let mut stories: HashMap<Uuid, Vec<ItemResponse>> = HashMap::new();
+    let mut ids: Vec<(Uuid, bool)> = Vec::new();
     for item in rows {
-        match item.cluster_id {
-            Some(cid) => cluster_map.entry(cid).or_default().push(item),
-            None => result.push(ClusterResponse {
-                id: item.id,
-                is_cluster: false,
-                sort_date: item.published_at,
-                explored: false,
-                items: vec![item],
-            }),
+        let key = item.cluster_id.unwrap_or(item.id);
+        let members = stories.entry(key).or_default();
+        if members.is_empty() {
+            ids.push((key, item.cluster_id.is_some()));
         }
+        members.push(item);
     }
 
-    for (cid, mut items) in cluster_map {
-        let sort_date = items.iter().filter_map(|i| i.published_at).max();
-        sort_items(&mut items, ascending);
-        result.push(ClusterResponse {
-            id: cid,
-            is_cluster: true,
-            sort_date,
-            explored: false,
-            items,
-        });
-    }
+    let mut result: Vec<ClusterResponse> = ids
+        .into_iter()
+        .map(|(id, is_cluster)| {
+            let mut items = stories.remove(&id).unwrap_or_default();
+            sort_items(&mut items, ascending);
+            let sort_date = dates
+                .get(&id)
+                .copied()
+                .or_else(|| items.iter().filter_map(|i| i.published_at).max());
+            ClusterResponse {
+                id,
+                is_cluster,
+                sort_date,
+                explored: false,
+                items,
+            }
+        })
+        .collect();
 
     result.sort_by(|a, b| {
+        let key = |c: &ClusterResponse| (c.sort_date, c.id);
         if ascending {
-            a.sort_date.cmp(&b.sort_date)
+            key(a).cmp(&key(b))
         } else {
-            b.sort_date.cmp(&a.sort_date)
+            key(b).cmp(&key(a))
         }
     });
     result
@@ -1481,10 +1513,11 @@ pub fn group_clusters(
 
 fn sort_items(items: &mut [ItemResponse], ascending: bool) {
     items.sort_by(|a, b| {
+        let key = |i: &ItemResponse| (i.published_at, i.id);
         if ascending {
-            a.published_at.cmp(&b.published_at)
+            key(a).cmp(&key(b))
         } else {
-            b.published_at.cmp(&a.published_at)
+            key(b).cmp(&key(a))
         }
     });
 }

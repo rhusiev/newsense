@@ -1,0 +1,102 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH anchor_items AS (\n            SELECT i.id, i.cluster_id, i.published_at\n            FROM items i\n            INNER JOIN sources s ON i.source_id = s.id\n            INNER JOIN feeds f ON f.source_id = s.id\n            INNER JOIN feed_subscriptions fs ON f.id = fs.feed_id\n            LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n            LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n            WHERE fs.user_id = $1\n              AND ($2::uuid IS NULL OR f.id = $2)\n              AND ($4::boolean = false OR (ir.is_read IS NULL OR ir.is_read = false))\n              AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $6)\n              AND ($7::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $7)\n        ),\n        anchor_entities AS (\n            SELECT COALESCE(cluster_id, id) AS entity_id, MAX(published_at) AS max_date\n            FROM anchor_items\n            GROUP BY COALESCE(cluster_id, id)\n        ),\n        -- Stories page by their latest matching article, the date they are shown by.\n        page AS (\n            SELECT entity_id, max_date FROM anchor_entities\n            WHERE ($3::timestamptz IS NULL OR CASE WHEN $9::boolean\n                THEN max_date > $3 OR (max_date = $3 AND entity_id > $8::uuid)\n                ELSE max_date < $3 OR (max_date = $3 AND entity_id < $8::uuid) END)\n            ORDER BY\n                CASE WHEN $9::boolean THEN max_date END ASC,\n                CASE WHEN $9::boolean THEN entity_id END ASC,\n                CASE WHEN NOT $9::boolean THEN max_date END DESC,\n                CASE WHEN NOT $9::boolean THEN entity_id END DESC\n            LIMIT $5\n        )\n        SELECT\n            i.id as \"id!\",\n            array_agg(f.id) as \"feed_ids!\",\n            i.title, i.link, i.content, i.author,\n            i.published_at, i.cluster_id, i.created_at,\n            ir.is_read as \"is_read?\",\n            ROUND(ir.liked)::REAL as \"liked?\",\n            ip.score as \"prediction_score?\",\n            p.max_date as \"story_date\"\n        FROM items i\n        INNER JOIN page p ON p.entity_id = COALESCE(i.cluster_id, i.id)\n        INNER JOIN feeds f ON f.source_id = i.source_id\n        LEFT JOIN feed_subscriptions vfs ON vfs.feed_id = f.id AND vfs.user_id = $1\n        LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1\n        LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1\n        WHERE\n            -- A story spans sources; show only the members this user may see.\n            (f.is_public OR f.owner_id = $1 OR vfs.user_id IS NOT NULL)\n            AND ($6::REAL IS NULL OR COALESCE(ip.score, 0.0) >= $6)\n            AND ($7::REAL IS NULL OR COALESCE(ip.score, 0.0) <= $7)\n        GROUP BY i.id, ir.is_read, ir.liked, ip.score, p.max_date\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "feed_ids!",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "link",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "author",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "published_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "cluster_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "is_read?",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "liked?",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 11,
+        "name": "prediction_score?",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 12,
+        "name": "story_date",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Bool",
+        "Int8",
+        "Float4",
+        "Float4",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      null,
+      false,
+      null
+    ]
+  },
+  "hash": "9b2448d84ae381903428006cddaa35b666f60afca6d0f60d0ef80e1b417db4d9"
+}
