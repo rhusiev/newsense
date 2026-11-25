@@ -119,6 +119,17 @@ docker exec -i newsense_db psql -U newsense_user -d newsense_db -v ON_ERROR_STOP
     < infrastructure/postgres/migrations/add_item_guid.sql
 ```
 
+`GET /items`, `/items/feed/{id}`, `/clusters` and `/clusters/feed/{id}` take
+`order=newest` (default) or `order=oldest`. Page a newest-first list with
+`before` and an oldest-first list with `after`, set to the last row's date:
+`published_at` for an item, `sort_date` for a story. Send that row's `id` as
+`cursor_id` so rows with the same date are not skipped. A cursor that does not
+fit the order is refused with 400. A story's `sort_date` is the date of its
+latest article that matches the list's filters, which is the date it is paged
+by. A page shorter than `limit` is the end of the list, also for a daily top N
+in oldest-first order, where the server moves past days whose stories are all
+read or filtered out.
+
 The LLM summaries use one OpenAI-compatible endpoint. Set these in `.env`; the
 worker does nothing while any of the first three is empty:
 
