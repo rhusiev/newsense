@@ -313,7 +313,8 @@ pub async fn get_llm_key(
     }))
 }
 
-/// Stores the user's own endpoint and key. An existing key stays until replaced.
+/// Stores the user's own endpoint, model and key. All three are required, so
+/// changing the model also sends the key again.
 pub async fn set_llm_key(
     State(state): State<AppState>,
     AuthUser { id: user_id, .. }: AuthUser,

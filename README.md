@@ -99,7 +99,20 @@ inference is batched by `THREAD_PAIR_BATCH` (default 64). `THREAD_TWO_HOP=1`
 adds neighbors of neighbors so chains are not cut by the k limit.
 
 `init.sql` only runs on an empty volume, so an existing deployment needs the
-files in `infrastructure/postgres/migrations/` applied by hand:
+files in `infrastructure/postgres/migrations/` applied by hand. Apply the ones
+not yet applied in this order. Name order does not work, because
+`add_llm_summaries.sql` changes the table that `add_user_settings.sql` creates:
+
+```text
+add_preference_embedding  add_l6_embedding       add_item_predictions
+add_user_role             add_access_codes       add_multi_use_codes
+add_subscription_feed_index                      add_item_guid
+separate_read_from_label  add_exposures          add_full_text
+add_user_settings         add_feed_filters       add_story_threads
+add_story_impressions     add_llm_summaries      add_user_llm_keys
+add_story_embeddings      add_thread_confidence  add_thread_pair_scores
+add_list_order            add_thread_llm_calls
+```
 
 ```sh
 docker exec -i newsense_db psql -U newsense_user -d newsense_db -v ON_ERROR_STOP=1 \
@@ -134,7 +147,8 @@ A user may supply their own endpoint and key with `PUT /settings/llm-key`
 `not-applicable`, the cached summary when ready, whether a newer article makes
 it stale, and today's call count and limit. `POST /clusters/{id}/summary/refresh`
 drops the cached summary so the worker makes a new one. `GET /admin/users/llm`
-lists each user's switch and limit for the admin tab. `GET
+lists whether each user may use LLM features and their daily limit, for the
+admin tab. `GET
 /clusters/{id}/thread` returns the timeline of the thread containing a story:
 its id, first headline and stories ordered by date with item counts and the
 viewer's read state. `GET /threads` lists up to 50 visible storylines with
