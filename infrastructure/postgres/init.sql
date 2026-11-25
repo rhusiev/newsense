@@ -182,6 +182,8 @@ CREATE TABLE IF NOT EXISTS user_settings (
     score_threshold REAL NOT NULL DEFAULT -0.7 CHECK (score_threshold >= -1 AND score_threshold <= 1),
     top_per_day INTEGER NOT NULL DEFAULT 40 CHECK (top_per_day BETWEEN 1 AND 200),
     use_clusters BOOLEAN NOT NULL DEFAULT true,
+    -- Global list order: 'newest' starts at the top of the archive, 'oldest' at the bottom.
+    list_order TEXT NOT NULL DEFAULT 'newest' CHECK (list_order IN ('newest', 'oldest')),
     -- 'sheet': reader opens over the list; 'page': reader replaces the list
     reader_layout TEXT NOT NULL DEFAULT 'sheet' CHECK (reader_layout IN ('sheet', 'page')),
     -- Opt-in LLM summaries of a story; the switch is the user's, the limit the admin's.

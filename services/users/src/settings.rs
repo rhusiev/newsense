@@ -28,6 +28,8 @@ pub struct SettingsResponse {
     score_threshold: f32,
     top_per_day: i32,
     use_clusters: bool,
+    /// 'newest' or 'oldest', the global reading order of list views.
+    list_order: String,
     reader_layout: String,
     llm_summaries: bool,
     llm_allowed: bool,
@@ -51,6 +53,7 @@ pub struct UpdateSettingsRequest {
     score_threshold: Option<f32>,
     top_per_day: Option<i32>,
     use_clusters: Option<bool>,
+    list_order: Option<String>,
     reader_layout: Option<String>,
     /// The user's own switch. The daily limit and the admin allowance are not
     /// writable here.
@@ -154,8 +157,8 @@ async fn ensure_row(state: &AppState, user_id: Uuid) -> Result<(), ApiError> {
 
 async fn read_settings(state: &AppState, user_id: Uuid) -> Result<SettingsResponse, ApiError> {
     let s = sqlx::query!(
-        r#"SELECT all_articles_filter, score_threshold, top_per_day, use_clusters, reader_layout,
-                  llm_summaries, llm_allowed, llm_daily_limit
+        r#"SELECT all_articles_filter, score_threshold, top_per_day, use_clusters,
+                  list_order, reader_layout, llm_summaries, llm_allowed, llm_daily_limit
            FROM user_settings WHERE user_id = $1"#,
         user_id
     )
@@ -183,6 +186,7 @@ async fn read_settings(state: &AppState, user_id: Uuid) -> Result<SettingsRespon
         score_threshold: s.score_threshold,
         top_per_day: s.top_per_day,
         use_clusters: s.use_clusters,
+        list_order: s.list_order,
         reader_layout: s.reader_layout,
         llm_summaries: s.llm_summaries,
         llm_allowed: s.llm_allowed,
@@ -216,6 +220,7 @@ pub async fn update_settings(
             score_threshold = COALESCE($3, score_threshold),
             top_per_day = COALESCE($4, top_per_day),
             use_clusters = COALESCE($5, use_clusters),
+            list_order = COALESCE($8, list_order),
             reader_layout = COALESCE($6, reader_layout),
             llm_summaries = COALESCE($7, llm_summaries),
             updated_at = CURRENT_TIMESTAMP
@@ -227,7 +232,8 @@ pub async fn update_settings(
         p.top_per_day,
         p.use_clusters,
         p.reader_layout,
-        p.llm_summaries
+        p.llm_summaries,
+        p.list_order
     )
     .execute(&state.db)
     .await

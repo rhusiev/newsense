@@ -1,13 +1,33 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
+/// Chronological direction of a list. `newest` preserves the existing first
+/// page at the top of the archive; `oldest` starts at the bottom and pages up.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ListOrder {
+    #[default]
+    Newest,
+    Oldest,
+}
+
+impl ListOrder {
+    pub fn ascending(self) -> bool {
+        matches!(self, Self::Oldest)
+    }
+}
+
 #[derive(Deserialize)]
 pub struct GetItemsQuery {
     pub limit: Option<i64>,
+    /// Deprecated alias for `after` on the per-feed item list.
     #[serde(default, with = "time::serde::iso8601::option")]
     pub since: Option<time::OffsetDateTime>,
     #[serde(default, with = "time::serde::iso8601::option")]
     pub before: Option<time::OffsetDateTime>,
+    #[serde(default, with = "time::serde::iso8601::option")]
+    pub after: Option<time::OffsetDateTime>,
+    pub order: Option<ListOrder>,
     pub unread_only: Option<bool>,
     pub score_min: Option<f32>,
     pub score_max: Option<f32>,
@@ -24,6 +44,8 @@ impl GetItemsQuery {
         GetClustersQuery {
             limit: self.limit,
             before: self.before,
+            after: self.after,
+            order: self.order,
             unread_only: self.unread_only,
             feed_id: None,
             score_min: self.score_min,
@@ -41,6 +63,9 @@ pub struct GetClustersQuery {
     pub limit: Option<i64>,
     #[serde(default, with = "time::serde::iso8601::option")]
     pub before: Option<time::OffsetDateTime>,
+    #[serde(default, with = "time::serde::iso8601::option")]
+    pub after: Option<time::OffsetDateTime>,
+    pub order: Option<ListOrder>,
     pub unread_only: Option<bool>,
     pub feed_id: Option<Uuid>,
     pub score_min: Option<f32>,
@@ -71,6 +96,8 @@ impl GetUnreadCountsQuery {
         GetClustersQuery {
             limit: None,
             before: None,
+            after: None,
+            order: None,
             unread_only: Some(true),
             feed_id: None,
             score_min: self.score_min,
@@ -239,7 +266,29 @@ pub struct ErrorResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::UpdateItemStatusRequest;
+    use super::{ListOrder, UpdateItemStatusRequest};
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct OrderQuery {
+        #[serde(default)]
+        order: Option<ListOrder>,
+    }
+
+    #[test]
+    fn list_order_accepts_only_the_two_directions() {
+        let query = |json| serde_json::from_str::<OrderQuery>(json);
+        assert!(query("{}").unwrap().order.is_none());
+        assert_eq!(
+            query(r#"{"order":"oldest"}"#).unwrap().order,
+            Some(ListOrder::Oldest)
+        );
+        assert_eq!(
+            query(r#"{"order":"newest"}"#).unwrap().order,
+            Some(ListOrder::Newest)
+        );
+        assert!(query(r#"{"order":"middle"}"#).is_err());
+    }
 
     fn liked(body: &str) -> Option<Option<f32>> {
         serde_json::from_str::<UpdateItemStatusRequest>(body)
