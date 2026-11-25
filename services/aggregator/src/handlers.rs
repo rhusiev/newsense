@@ -934,6 +934,20 @@ pub async fn get_story_summary_status(
     AuthUser { id: user_id, .. }: AuthUser,
     Path(story_id): Path<Uuid>,
 ) -> Result<Json<StorySummaryStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // The status reads the user's settings row, which the users service makes on
+    // first `GET /settings`; a client that skips it must not get a 500.
+    sqlx::query!(
+        "INSERT INTO user_settings (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
+        user_id,
+    )
+    .execute(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )
+    })?;
     let row = sqlx::query!(
         r#"
         WITH settings AS (
@@ -944,24 +958,26 @@ pub async fn get_story_summary_status(
             SELECT summary, model, updated_at FROM story_summaries
             WHERE user_id = $1 AND story_id = $2
         ),
-        eligible AS (
-            SELECT EXISTS (
-                SELECT 1
-                FROM items i
-                JOIN item_full_texts ft ON ft.item_id = i.id AND ft.text IS NOT NULL
-                JOIN feeds f ON f.source_id = i.source_id
-                LEFT JOIN feed_subscriptions fs
-                    ON fs.feed_id = f.id AND fs.user_id = $1
-                WHERE COALESCE(i.cluster_id, i.id) = $2
-                  AND f.full_text AND NOT f.is_public
-                  AND (f.owner_id = $1 OR fs.user_id = $1)
-            ) AS ok
-        ),
-        latest AS (
-            SELECT MAX(ft.fetched_at) AS fetched_at
+        -- The text the summary worker may use, the same rule as its STORY_TEXT.
+        story_texts AS (
+            SELECT ft.fetched_at
             FROM items i
             JOIN item_full_texts ft ON ft.item_id = i.id AND ft.text IS NOT NULL
+            JOIN feeds f ON f.source_id = i.source_id
+            LEFT JOIN feed_subscriptions fs
+                ON fs.feed_id = f.id AND fs.user_id = $1
             WHERE COALESCE(i.cluster_id, i.id) = $2
+              AND f.full_text AND NOT f.is_public
+              AND (f.owner_id = $1 OR fs.user_id = $1)
+              AND NOT EXISTS (
+                  SELECT 1 FROM feeds pf WHERE pf.source_id = i.source_id AND pf.is_public
+              )
+        ),
+        eligible AS (
+            SELECT EXISTS (SELECT 1 FROM story_texts) AS ok
+        ),
+        latest AS (
+            SELECT MAX(fetched_at) AS fetched_at FROM story_texts
         ),
         usage AS (
             SELECT COUNT(*)::bigint AS used FROM llm_calls

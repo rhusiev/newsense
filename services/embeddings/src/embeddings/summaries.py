@@ -63,6 +63,9 @@ CANDIDATES = """
           WHERE COALESCE(i.cluster_id, i.id) = si.story_id
             AND f.full_text AND NOT f.is_public
             AND (f.owner_id = si.user_id OR fs.user_id = si.user_id)
+            AND NOT EXISTS (
+                SELECT 1 FROM feeds pf WHERE pf.source_id = i.source_id AND pf.is_public
+            )
       )
     ORDER BY si.first_shown_at
     LIMIT $3
@@ -79,6 +82,9 @@ STORY_TEXT = """
     WHERE COALESCE(i.cluster_id, i.id) = $2
       AND f.full_text AND NOT f.is_public
       AND (f.owner_id = $1 OR fs.user_id = $1)
+      AND NOT EXISTS (
+          SELECT 1 FROM feeds pf WHERE pf.source_id = i.source_id AND pf.is_public
+      )
     ORDER BY i.published_at
 """
 
