@@ -8,11 +8,12 @@
 //! so an evaluation can weight explored labels by 1 / propensity.
 
 use axum::{Json, http::StatusCode};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::{
     handlers::{group_clusters, log_impressions, story_ids},
-    models::{ClusterResponse, ErrorResponse, GetClustersQuery, ItemResponse},
+    models::{ClusterResponse, ErrorResponse, GetClustersQuery, ItemResponse, PageCursor},
     state::AppState,
 };
 
@@ -28,6 +29,9 @@ const MAX_LIMIT: i64 = 100;
 /// back to the oldest unread article, so a backlog is never cut off.
 const LOOKBACK_DAYS: i32 = 31;
 const TOP_POLICY: &str = "top";
+/// Forward windows one oldest-first page may scan when filters hide whole
+/// windows, so a reader with a long fully read stretch still gets a page.
+const MAX_FORWARD_WINDOWS: usize = 12;
 
 fn bad_request(error: String) -> ApiError {
     (StatusCode::BAD_REQUEST, Json(ErrorResponse { error }))
@@ -50,6 +54,8 @@ struct Picked {
     propensity: f64,
     rank: i64,
     score: f64,
+    /// The story's latest article, which pages and orders it.
+    max_date: Option<time::OffsetDateTime>,
 }
 
 /// Ranks the user's subscribed feeds together, or only `feed_id` when given.
@@ -66,20 +72,20 @@ pub async fn top_clusters(
     let scope = scope(state, top_n, feed_id, params).await?;
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
     let unread_only = params.unread_only.unwrap_or(false);
-    let picked = pick_entities(
-        state,
-        user_id,
-        &scope,
-        params.before,
-        unread_only,
-        limit,
-        true,
-    )
-    .await?;
+    let cursor = params.cursor().map_err(bad_request)?;
+    let picked = pick_page(state, user_id, &scope, cursor, unread_only, limit, true).await?;
     log_exposures(state, user_id, &picked).await?;
 
     let ids: Vec<Uuid> = picked.iter().map(|p| p.entity_id).collect();
-    let mut clusters = group_clusters(fetch_items(state, user_id, &ids, true).await?);
+    let dates: HashMap<Uuid, time::OffsetDateTime> = picked
+        .iter()
+        .filter_map(|p| p.max_date.map(|d| (p.entity_id, d)))
+        .collect();
+    let mut clusters = group_clusters(
+        fetch_items(state, user_id, &ids, true, cursor.ascending).await?,
+        &dates,
+        cursor.ascending,
+    );
     for cluster in &mut clusters {
         cluster.explored = picked
             .iter()
@@ -106,19 +112,11 @@ pub async fn top_items(
     let scope = scope(state, top_n, feed_id, params).await?;
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
     let unread_only = params.unread_only.unwrap_or(false);
-    let picked = pick_entities(
-        state,
-        user_id,
-        &scope,
-        params.before,
-        unread_only,
-        limit,
-        false,
-    )
-    .await?;
+    let cursor = params.cursor().map_err(bad_request)?;
+    let picked = pick_page(state, user_id, &scope, cursor, unread_only, limit, false).await?;
     log_exposures(state, user_id, &picked).await?;
     let ids: Vec<Uuid> = picked.iter().map(|p| p.entity_id).collect();
-    let items = fetch_items(state, user_id, &ids, false).await?;
+    let items = fetch_items(state, user_id, &ids, false, cursor.ascending).await?;
     log_impressions(state, user_id, &story_ids(&items)).await;
     Ok(items)
 }
@@ -140,6 +138,7 @@ pub async fn count_unread_top(
         state,
         user_id,
         &scope,
+        PageCursor::default(),
         None,
         true,
         all_days,
@@ -197,6 +196,103 @@ struct Scope<'a> {
     per_feed: bool,
 }
 
+/// One page of picked entities. Newest-first ranks one window back from the
+/// cursor. Oldest-first ranks the next `LOOKBACK_DAYS` days that have matching
+/// articles, then moves on while the page is short, so a stretch where every
+/// story is read or filtered out does not end the list.
+async fn pick_page(
+    state: &AppState,
+    user_id: Uuid,
+    scope: &Scope<'_>,
+    cursor: PageCursor,
+    unread_only: bool,
+    limit: i64,
+    group_stories: bool,
+) -> Result<Vec<Picked>, ApiError> {
+    if !cursor.ascending {
+        return pick_entities(state, user_id, scope, cursor, None, unread_only, limit, group_stories)
+            .await;
+    }
+    let mut picked = Vec::new();
+    let mut page_cursor = cursor;
+    let mut start = cursor.at;
+    for _ in 0..MAX_FORWARD_WINDOWS {
+        let Some(window) = forward_window(state, user_id, scope, start, unread_only).await? else {
+            break;
+        };
+        let remaining = limit - picked.len() as i64;
+        picked.extend(
+            pick_entities(
+                state,
+                user_id,
+                scope,
+                page_cursor,
+                Some(window),
+                unread_only,
+                remaining,
+                group_stories,
+            )
+            .await?,
+        );
+        if picked.len() as i64 >= limit {
+            break;
+        }
+        // The next window starts where this one ended; nothing in it was shown.
+        start = Some(window.1);
+        page_cursor = PageCursor { ascending: true, at: None, id: None };
+    }
+    Ok(picked)
+}
+
+/// The oldest-first window from the day of `start` (the archive's start when
+/// none): it ends after the `LOOKBACK_DAYS`-th day that has an article, an
+/// unread one with `unread_only`. `None` when no such day is left.
+async fn forward_window(
+    state: &AppState,
+    user_id: Uuid,
+    scope: &Scope<'_>,
+    start: Option<time::OffsetDateTime>,
+    unread_only: bool,
+) -> Result<Option<(time::OffsetDateTime, time::OffsetDateTime)>, ApiError> {
+    let row = sqlx::query!(
+        r#"
+        WITH scoped_feeds AS (
+            SELECT f.source_id
+            FROM feeds f
+            LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $1
+            WHERE ($2::uuid IS NULL AND fs.user_id IS NOT NULL) OR f.id = $2
+        ),
+        start_day AS (
+            SELECT (COALESCE($3::timestamptz, '1970-01-01T00:00:00+00'::timestamptz)
+                    AT TIME ZONE $4)::date AS day
+        ),
+        days AS (
+            SELECT DISTINCT (i.published_at AT TIME ZONE $4)::date AS day
+            FROM items i
+            INNER JOIN scoped_feeds sf ON sf.source_id = i.source_id
+            LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $1
+            WHERE i.published_at >= (SELECT day FROM start_day)::timestamp AT TIME ZONE $4
+              AND ($5::boolean = false OR NOT COALESCE(ir.is_read, false))
+            ORDER BY day
+            LIMIT $6
+        )
+        SELECT
+            (SELECT day FROM start_day)::timestamp AT TIME ZONE $4 AS "from_at!",
+            (SELECT (MAX(day) + 1)::timestamp AT TIME ZONE $4 FROM days) AS to_at
+        "#,
+        user_id,
+        scope.feed_id,
+        start,
+        scope.tz,
+        unread_only,
+        i64::from(LOOKBACK_DAYS)
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(internal)?;
+    Ok(row.to_at.map(|to_at| (row.from_at, to_at)))
+}
+
 /// Ranks each day's clusters by their best item score, within each feed when
 /// `per_feed`, and picks the shown ones. Feeds filtered by 'off' or 'score'
 /// pass their stories without ranking or exploration. Of N slots, round(N * explore) go to
@@ -208,7 +304,8 @@ async fn pick_entities(
     state: &AppState,
     user_id: Uuid,
     scope: &Scope<'_>,
-    before: Option<time::OffsetDateTime>,
+    cursor: PageCursor,
+    window: Option<(time::OffsetDateTime, time::OffsetDateTime)>,
     unread_only: bool,
     limit: i64,
     group_stories: bool,
@@ -225,19 +322,37 @@ async fn pick_entities(
             LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $1
             WHERE ($7::uuid IS NULL AND fs.user_id IS NOT NULL) OR f.id = $7
         ),
-        cursor_at AS (SELECT COALESCE($2::timestamptz, now()) AS at),
-        -- Reaches back to the oldest unread article before the cursor, and at least $10 days.
-        window_start AS (
-            SELECT LEAST(
-                (SELECT at FROM cursor_at) - make_interval(days => $10),
-                (SELECT MIN(i.published_at) - interval '1 day'
-                 FROM items i
-                 JOIN scoped_feeds sf ON sf.source_id = i.source_id
-                 LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $1
-                 WHERE COALESCE(ir.is_read, false) = false
-                   AND i.published_at < (SELECT at FROM cursor_at))
-            ) AS at
+        bounds AS (
+            SELECT COALESCE($2::timestamptz, now()) AS cursor_at
         ),
+        -- Newest-first reaches back to the oldest unread article before the
+        -- cursor, and at least $10 days. Oldest-first ranks the window the
+        -- caller found with `forward_window`.
+        window_bounds AS (
+            SELECT
+                CASE WHEN $12::boolean THEN $14::timestamptz
+                ELSE LEAST(
+                    (SELECT cursor_at FROM bounds) - make_interval(days => $10),
+                    (SELECT MIN(i.published_at) - interval '1 day'
+                     FROM items i
+                     JOIN scoped_feeds sf ON sf.source_id = i.source_id
+                     LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $1
+                     WHERE COALESCE(ir.is_read, false) = false
+                       AND i.published_at < (SELECT cursor_at FROM bounds))
+                ) END AS from_at,
+                CASE WHEN $12::boolean THEN $15::timestamptz
+                ELSE 'infinity'::timestamptz END AS to_at
+        ),
+        window_entities AS (
+            SELECT DISTINCT
+                CASE WHEN $11::boolean THEN COALESCE(i.cluster_id, i.id) ELSE i.id END AS entity_id
+            FROM items i
+            INNER JOIN scoped_feeds sf ON sf.source_id = i.source_id
+            WHERE i.published_at >= (SELECT from_at FROM window_bounds)
+              AND i.published_at < (SELECT to_at FROM window_bounds)
+        ),
+        -- A story is judged on all its articles, not only those in the window,
+        -- so its day, score and read state do not depend on the page.
         entities AS (
             SELECT
                 CASE WHEN $6::boolean THEN sf.feed_id END AS scope_id,
@@ -252,7 +367,8 @@ async fn pick_entities(
             INNER JOIN scoped_feeds sf ON sf.source_id = i.source_id
             LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $1
             LEFT JOIN item_predictions ip ON ip.item_id = i.id AND ip.user_id = $1
-            WHERE i.published_at >= (SELECT at FROM window_start)
+            WHERE (CASE WHEN $11::boolean THEN COALESCE(i.cluster_id, i.id) ELSE i.id END)
+                  IN (SELECT entity_id FROM window_entities)
             GROUP BY 1, 5
         ),
         ranked AS (
@@ -306,16 +422,29 @@ async fn pick_entities(
             policy AS "policy!",
             propensity AS "propensity!",
             rnk AS "rank!",
-            score AS "score!"
+            score AS "score!",
+            max_date
         FROM shown
-        WHERE ($2::timestamptz IS NULL OR max_date < $2)
-          AND day > ((SELECT at FROM window_start) AT TIME ZONE $3)::date
+        WHERE ($2::timestamptz IS NULL OR CASE WHEN $12::boolean
+              THEN max_date > $2 OR (max_date = $2 AND entity_id > $13::uuid)
+              ELSE max_date < $2 OR (max_date = $2 AND entity_id < $13::uuid) END)
+          AND day >= (
+              SELECT (from_at AT TIME ZONE $3)::date
+                     + CASE WHEN $12::boolean THEN 0 ELSE 1 END
+              FROM window_bounds
+          )
+          AND (NOT $12::boolean
+               OR day < (SELECT (to_at AT TIME ZONE $3)::date FROM window_bounds))
           AND ($8::boolean = false OR NOT all_read)
-        ORDER BY max_date DESC
+        ORDER BY
+            CASE WHEN $12::boolean THEN max_date END ASC,
+            CASE WHEN $12::boolean THEN entity_id END ASC,
+            CASE WHEN NOT $12::boolean THEN max_date END DESC,
+            CASE WHEN NOT $12::boolean THEN entity_id END DESC
         LIMIT $9
         "#,
         user_id,
-        before,
+        cursor.at,
         scope.tz,
         scope.top_n,
         scope.explore as f64,
@@ -324,7 +453,11 @@ async fn pick_entities(
         unread_only,
         limit,
         LOOKBACK_DAYS,
-        group_stories
+        group_stories,
+        cursor.ascending,
+        cursor.id,
+        window.map(|w| w.0),
+        window.map(|w| w.1)
     )
     .fetch_all(&state.db)
     .await
@@ -364,6 +497,7 @@ async fn fetch_items(
     user_id: Uuid,
     entity_ids: &[Uuid],
     group_stories: bool,
+    ascending: bool,
 ) -> Result<Vec<ItemResponse>, ApiError> {
     sqlx::query_as!(
         ItemResponse,
@@ -378,15 +512,23 @@ async fn fetch_items(
             ip.score as "prediction_score?"
         FROM items i
         INNER JOIN feeds f ON f.source_id = i.source_id
+        LEFT JOIN feed_subscriptions vfs ON vfs.feed_id = f.id AND vfs.user_id = $1
         LEFT JOIN item_reads ir ON i.id = ir.item_id AND ir.user_id = $1
         LEFT JOIN item_predictions ip ON i.id = ip.item_id AND ip.user_id = $1
         WHERE (CASE WHEN $3::boolean THEN COALESCE(i.cluster_id, i.id) ELSE i.id END) = ANY($2::uuid[])
+          -- A story spans sources; show only the members this user may see.
+          AND (f.is_public OR f.owner_id = $1 OR vfs.user_id IS NOT NULL)
         GROUP BY i.id, ir.is_read, ir.liked, ip.score
-        ORDER BY i.published_at DESC
+        ORDER BY
+            CASE WHEN $4::boolean THEN i.published_at END ASC,
+            CASE WHEN $4::boolean THEN i.id END ASC,
+            CASE WHEN NOT $4::boolean THEN i.published_at END DESC,
+            CASE WHEN NOT $4::boolean THEN i.id END DESC
         "#,
         user_id,
         entity_ids,
-        group_stories
+        group_stories,
+        ascending
     )
     .fetch_all(&state.db)
     .await

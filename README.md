@@ -81,24 +81,54 @@ backfill before threads regroup them.
 Threads are soft. Each cluster stores `thread_confidence` and one
 `thread_alternative_id`. A story with no confident pair stays a singleton.
 
-The chosen setup is `THREAD_KNN=10` with `THREAD_LLM_ENABLED=1`: the worker
+With `THREAD_LLM_ENABLED=1` (off by default) and `THREAD_KNN=10`, the worker
 asks the configured LLM whether each candidate pair follows one storyline and
-joins pairs scoring at least `THREAD_LLM_THRESHOLD`. Verdicts are cached in
+joins pairs scoring at least `THREAD_LLM_THRESHOLD`. Only headlines and feed
+summaries of articles from public feeds are sent. Full text never is, because
+it exists only for private feeds. A pair with a story that has no public
+article is not sent and joins by the cosine rule. Verdicts are cached in
 `thread_pair_scores` per pair, model and text hash, so reruns do not pay twice.
-`THREAD_LLM_MAX_CALLS` caps one run and `THREAD_LLM_DAILY_CALLS` caps one day;
-each side of a pair is shortened to `THREAD_LLM_MAX_CHARS` before it is sent.
+`THREAD_LLM_MAX_CALLS` caps one run and `THREAD_LLM_DAILY_CALLS` caps one day.
+Every request counts toward the daily cap, including failed ones
+(`thread_llm_calls`). Each side of a pair is shortened to
+`THREAD_LLM_MAX_CHARS` before it is sent. `LLM_REASONING` and
+`LLM_PROVIDER_ROUTING` must be JSON objects; the worker does not start otherwise.
 A local quantized ONNX scorer can be used
 instead by setting `THREAD_PAIR_MODEL` and disabling the LLM verifier; its
 inference is batched by `THREAD_PAIR_BATCH` (default 64). `THREAD_TWO_HOP=1`
 adds neighbors of neighbors so chains are not cut by the k limit.
 
 `init.sql` only runs on an empty volume, so an existing deployment needs the
-files in `infrastructure/postgres/migrations/` applied by hand:
+files in `infrastructure/postgres/migrations/` applied by hand. Apply the ones
+not yet applied in this order. Name order does not work, because
+`add_llm_summaries.sql` changes the table that `add_user_settings.sql` creates:
+
+```text
+add_preference_embedding  add_l6_embedding       add_item_predictions
+add_user_role             add_access_codes       add_multi_use_codes
+add_subscription_feed_index                      add_item_guid
+separate_read_from_label  add_exposures          add_full_text
+add_user_settings         add_feed_filters       add_story_threads
+add_story_impressions     add_llm_summaries      add_user_llm_keys
+add_story_embeddings      add_thread_confidence  add_thread_pair_scores
+add_list_order            add_thread_llm_calls
+```
 
 ```sh
 docker exec -i newsense_db psql -U newsense_user -d newsense_db -v ON_ERROR_STOP=1 \
     < infrastructure/postgres/migrations/add_item_guid.sql
 ```
+
+`GET /items`, `/items/feed/{id}`, `/clusters` and `/clusters/feed/{id}` take
+`order=newest` (default) or `order=oldest`. Page a newest-first list with
+`before` and an oldest-first list with `after`, set to the last row's date:
+`published_at` for an item, `sort_date` for a story. Send that row's `id` as
+`cursor_id` so rows with the same date are not skipped. A cursor that does not
+fit the order is refused with 400. A story's `sort_date` is the date of its
+latest article that matches the list's filters, which is the date it is paged
+by. A page shorter than `limit` is the end of the list, also for a daily top N
+in oldest-first order, where the server moves past days whose stories are all
+read or filtered out.
 
 The LLM summaries use one OpenAI-compatible endpoint. Set these in `.env`; the
 worker does nothing while any of the first three is empty:
@@ -128,7 +158,8 @@ A user may supply their own endpoint and key with `PUT /settings/llm-key`
 `not-applicable`, the cached summary when ready, whether a newer article makes
 it stale, and today's call count and limit. `POST /clusters/{id}/summary/refresh`
 drops the cached summary so the worker makes a new one. `GET /admin/users/llm`
-lists each user's switch and limit for the admin tab. `GET
+lists whether each user may use LLM features and their daily limit, for the
+admin tab. `GET
 /clusters/{id}/thread` returns the timeline of the thread containing a story:
 its id, first headline and stories ordered by date with item counts and the
 viewer's read state. `GET /threads` lists up to 50 visible storylines with

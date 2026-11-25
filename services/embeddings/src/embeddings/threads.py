@@ -71,8 +71,9 @@ def group(
     """Return labels, pair confidence and alternative cluster indices.
 
     `vectors` rows must be L2-normalized. When verdicts are provided, they
-    decide which cosine candidates join. Otherwise an optional local pair
-    scorer can confirm them; without either, cosine alone joins stories.
+    decide which cosine candidates join; a candidate without a verdict joins
+    by the cosine rule. Otherwise an optional local pair scorer can confirm
+    them; without either, cosine alone joins stories.
     """
     n = len(vectors)
     if n < 2:
@@ -90,6 +91,9 @@ def group(
             key: float(prob) for key, prob in verdicts.items()
             if key in edges and not thread_verdicts.accept(float(prob))
         }
+        for key, weight in edges.items():
+            if key not in verdicts and weight >= THREAD_EMBEDDING_MIN:
+                accepted[key] = weight
         edges = accepted
     elif pair_scores.enabled() and texts is not None:
         keys = sorted(edges)
@@ -140,10 +144,19 @@ async def _load_stories(conn):
         SELECT c.id, c.thread_id, MIN(i.published_at) AS started_at,
                string_agg(i.title, ' ' ORDER BY i.published_at, i.id) AS titles,
                COALESCE(string_agg(LEFT(ft.text, 700), ' ' ORDER BY i.published_at, i.id), '') AS body,
+               string_agg(i.title, ' ' ORDER BY i.published_at, i.id)
+                   FILTER (WHERE pub.public) AS public_titles,
+               COALESCE(string_agg(LEFT(i.content, 700), ' ' ORDER BY i.published_at, i.id)
+                   FILTER (WHERE pub.public), '') AS public_body,
                array_agg(i.story_embedding::text) AS embeddings
         FROM clusters c
         JOIN items i ON i.cluster_id = c.id
         LEFT JOIN item_full_texts ft ON ft.item_id = i.id
+        CROSS JOIN LATERAL (
+            SELECT EXISTS (
+                SELECT 1 FROM feeds f WHERE f.source_id = i.source_id AND f.is_public
+            ) AS public
+        ) pub
         WHERE c.created_at > now() - interval '{days} days'
           AND i.story_embedding IS NOT NULL
         GROUP BY c.id, c.thread_id
@@ -163,6 +176,19 @@ async def _load_stories(conn):
     return rows, np.stack(vectors) if vectors else np.zeros((0, 0), dtype=np.float32), texts
 
 
+def _shareable_texts(rows) -> dict:
+    """Text the instance LLM may see: only articles from public feeds.
+
+    Full text exists only for private feeds, so it never leaves the worker. A
+    story without a public article is absent and keeps the cosine rule.
+    """
+    return {
+        row["id"]: (row["public_titles"], row["public_body"] or "")
+        for row in rows
+        if row["public_titles"]
+    }
+
+
 async def update_threads(conn) -> int:
     """Regroup settled stories and return how many joined a thread."""
     rows, vectors, texts = await _load_stories(conn)
@@ -173,13 +199,15 @@ async def update_threads(conn) -> int:
     if THREAD_LLM_ENABLED and LLM_BASE_URL and LLM_API_KEY and LLM_MODEL:
         sim = vectors @ vectors.T
         ids = [row["id"] for row in rows]
-        texts_by_id = {row["id"]: text for row, text in zip(rows, texts)}
+        texts_by_id = _shareable_texts(rows)
         pairs = []
         index_of = {}
         for (i, j) in _candidates(sim, 0.0):
             if abs((rows[i]["started_at"] - rows[j]["started_at"]).days) > THREAD_GAP_DAYS:
                 continue
             a, b = ids[i], ids[j]
+            if a not in texts_by_id or b not in texts_by_id:
+                continue
             pair = (a, b) if a < b else (b, a)
             pairs.append(pair)
             index_of[pair] = (i, j) if i < j else (j, i)

@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH settings AS (\n            SELECT llm_summaries, llm_allowed, llm_daily_limit\n            FROM user_settings WHERE user_id = $1\n        ),\n        story AS (\n            SELECT summary, model, updated_at FROM story_summaries\n            WHERE user_id = $1 AND story_id = $2\n        ),\n        -- The text the summary worker may use, the same rule as its STORY_TEXT.\n        story_texts AS (\n            SELECT ft.fetched_at\n            FROM items i\n            JOIN item_full_texts ft ON ft.item_id = i.id AND ft.text IS NOT NULL\n            JOIN feeds f ON f.source_id = i.source_id\n            LEFT JOIN feed_subscriptions fs\n                ON fs.feed_id = f.id AND fs.user_id = $1\n            WHERE COALESCE(i.cluster_id, i.id) = $2\n              AND f.full_text AND NOT f.is_public\n              AND (f.owner_id = $1 OR fs.user_id = $1)\n              AND NOT EXISTS (\n                  SELECT 1 FROM feeds pf WHERE pf.source_id = i.source_id AND pf.is_public\n              )\n        ),\n        eligible AS (\n            SELECT EXISTS (SELECT 1 FROM story_texts) AS ok\n        ),\n        latest AS (\n            SELECT MAX(fetched_at) AS fetched_at FROM story_texts\n        ),\n        usage AS (\n            SELECT COUNT(*)::bigint AS used FROM llm_calls\n            WHERE user_id = $1 AND created_at >= date_trunc('day', now())\n        )\n        SELECT\n            s.llm_summaries AS \"summaries!\",\n            s.llm_allowed AS \"allowed!\",\n            s.llm_daily_limit AS \"daily_limit!\",\n            (SELECT summary FROM story) AS summary,\n            (SELECT model FROM story) AS model,\n            (SELECT updated_at FROM story) AS updated_at,\n            e.ok AS \"eligible!\",\n            COALESCE(l.fetched_at > (SELECT updated_at FROM story), false) AS \"stale!\",\n            u.used AS \"used!\"\n        FROM settings s\n        CROSS JOIN eligible e\n        CROSS JOIN latest l\n        CROSS JOIN usage u\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "summaries!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "allowed!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "daily_limit!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "summary",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "model",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "eligible!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "stale!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "used!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "4452380616d80c3f5c479faa0eca75b013fb650830f1fe541cae4ae7959e8647"
+}

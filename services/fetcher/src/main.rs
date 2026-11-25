@@ -271,7 +271,9 @@ async fn process_single_feed(
                 .first()
                 .map(|l| l.href.clone())
                 .unwrap_or_default();
-            if link.is_empty() {
+            // The web renders the link as an anchor, so a `javascript:` link
+            // from a feed must never be stored.
+            if !is_web_link(&link) {
                 continue;
             }
 
@@ -355,6 +357,24 @@ async fn process_single_feed(
             .execute(pool)
             .await?;
             Err(e)
+        }
+    }
+}
+
+fn is_web_link(link: &str) -> bool {
+    url::Url::parse(link).is_ok_and(|u| matches!(u.scheme(), "http" | "https"))
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::is_web_link;
+
+    #[test]
+    fn only_http_links_are_kept() {
+        assert!(is_web_link("https://example.org/a"));
+        assert!(is_web_link("http://example.org/a"));
+        for link in ["", "javascript:alert(1)", "data:text/html,x", "/relative", "ftp://x/y"] {
+            assert!(!is_web_link(link), "{link}");
         }
     }
 }

@@ -8,7 +8,6 @@ failed attempts back off and count toward the daily limit.
 
 import base64
 import hashlib
-import json
 import logging
 import os
 
@@ -64,6 +63,9 @@ CANDIDATES = """
           WHERE COALESCE(i.cluster_id, i.id) = si.story_id
             AND f.full_text AND NOT f.is_public
             AND (f.owner_id = si.user_id OR fs.user_id = si.user_id)
+            AND NOT EXISTS (
+                SELECT 1 FROM feeds pf WHERE pf.source_id = i.source_id AND pf.is_public
+            )
       )
     ORDER BY si.first_shown_at
     LIMIT $3
@@ -80,6 +82,9 @@ STORY_TEXT = """
     WHERE COALESCE(i.cluster_id, i.id) = $2
       AND f.full_text AND NOT f.is_public
       AND (f.owner_id = $1 OR fs.user_id = $1)
+      AND NOT EXISTS (
+          SELECT 1 FROM feeds pf WHERE pf.source_id = i.source_id AND pf.is_public
+      )
     ORDER BY i.published_at
 """
 
@@ -149,16 +154,6 @@ def _language(rows) -> str | None:
     return LANGUAGE_NAMES.get(code.split("-")[0])
 
 
-def _provider_routing() -> dict | None:
-    if not LLM_PROVIDER_ROUTING:
-        return None
-    try:
-        return json.loads(LLM_PROVIDER_ROUTING)
-    except json.JSONDecodeError as e:
-        logger.warning(f"LLM_PROVIDER_ROUTING is not JSON: {e}")
-        return None
-
-
 def _decrypt_key(ciphertext: bytes, nonce: bytes) -> str:
     key = base64.b64decode(os.getenv("LLM_KEY_ENCRYPTION_KEY", ""))
     return AESGCM(key).decrypt(bytes(nonce), bytes(ciphertext), None).decode()
@@ -210,11 +205,10 @@ async def _call_model(config, title: str, body: str, language: str | None) -> st
         "max_tokens": LLM_SUMMARY_MAX_TOKENS,
         "temperature": 0.3,
     }
-    provider = _provider_routing()
-    if provider:
-        payload["provider"] = provider
+    if LLM_PROVIDER_ROUTING:
+        payload["provider"] = LLM_PROVIDER_ROUTING
     if LLM_REASONING:
-        payload["reasoning"] = json.loads(LLM_REASONING)
+        payload["reasoning"] = LLM_REASONING
     async with httpx.AsyncClient(timeout=LLM_REQUEST_TIMEOUT_S) as client:
         response = await client.post(
             url,

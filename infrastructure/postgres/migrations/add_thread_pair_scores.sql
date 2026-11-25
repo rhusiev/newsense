@@ -9,5 +9,3 @@ CREATE TABLE IF NOT EXISTS thread_pair_scores (
     CONSTRAINT thread_pair_scores_order CHECK (story_a < story_b),
     PRIMARY KEY (story_a, story_b, model)
 );
-CREATE INDEX IF NOT EXISTS idx_thread_pair_scores_created
-    ON thread_pair_scores(created_at);

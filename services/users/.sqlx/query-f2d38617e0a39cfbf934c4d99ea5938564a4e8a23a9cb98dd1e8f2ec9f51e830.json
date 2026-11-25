@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT all_articles_filter, score_threshold, top_per_day, use_clusters, reader_layout,\n                  llm_summaries, llm_allowed, llm_daily_limit\n           FROM user_settings WHERE user_id = $1",
+  "query": "SELECT all_articles_filter, score_threshold, top_per_day, use_clusters,\n                  list_order, reader_layout, llm_summaries, llm_allowed, llm_daily_limit\n           FROM user_settings WHERE user_id = $1",
   "describe": {
     "columns": [
       {
@@ -25,21 +25,26 @@
       },
       {
         "ordinal": 4,
-        "name": "reader_layout",
+        "name": "list_order",
         "type_info": "Text"
       },
       {
         "ordinal": 5,
+        "name": "reader_layout",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
         "name": "llm_summaries",
         "type_info": "Bool"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "llm_allowed",
         "type_info": "Bool"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "llm_daily_limit",
         "type_info": "Int4"
       }
@@ -57,8 +62,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "ffba218b5ae720c5669cecf86252f1b752cce8716219248774c9d268be81c56c"
+  "hash": "f2d38617e0a39cfbf934c4d99ea5938564a4e8a23a9cb98dd1e8f2ec9f51e830"
 }

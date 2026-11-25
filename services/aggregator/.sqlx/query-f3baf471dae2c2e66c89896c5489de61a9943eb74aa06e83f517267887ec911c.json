@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH scoped_feeds AS (\n            SELECT f.source_id\n            FROM feeds f\n            LEFT JOIN feed_subscriptions fs ON fs.feed_id = f.id AND fs.user_id = $1\n            WHERE ($2::uuid IS NULL AND fs.user_id IS NOT NULL) OR f.id = $2\n        ),\n        start_day AS (\n            SELECT (COALESCE($3::timestamptz, '1970-01-01T00:00:00+00'::timestamptz)\n                    AT TIME ZONE $4)::date AS day\n        ),\n        days AS (\n            SELECT DISTINCT (i.published_at AT TIME ZONE $4)::date AS day\n            FROM items i\n            INNER JOIN scoped_feeds sf ON sf.source_id = i.source_id\n            LEFT JOIN item_reads ir ON ir.item_id = i.id AND ir.user_id = $1\n            WHERE i.published_at >= (SELECT day FROM start_day)::timestamp AT TIME ZONE $4\n              AND ($5::boolean = false OR NOT COALESCE(ir.is_read, false))\n            ORDER BY day\n            LIMIT $6\n        )\n        SELECT\n            (SELECT day FROM start_day)::timestamp AT TIME ZONE $4 AS \"from_at!\",\n            (SELECT (MAX(day) + 1)::timestamp AT TIME ZONE $4 FROM days) AS to_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "from_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "to_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Text",
+        "Bool",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "f3baf471dae2c2e66c89896c5489de61a9943eb74aa06e83f517267887ec911c"
+}

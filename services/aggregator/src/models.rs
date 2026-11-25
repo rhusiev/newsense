@@ -1,13 +1,66 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
+/// Chronological direction of a list. `newest` preserves the existing first
+/// page at the top of the archive; `oldest` starts at the bottom and pages up.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ListOrder {
+    #[default]
+    Newest,
+    Oldest,
+}
+
+impl ListOrder {
+    pub fn ascending(self) -> bool {
+        matches!(self, Self::Oldest)
+    }
+}
+
+/// Where a page starts: after the row (`at`, `id`) in the list's direction.
+/// `id` breaks ties between rows with the same date; without it the cursor is
+/// a strict date bound, as older clients send.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PageCursor {
+    pub ascending: bool,
+    pub at: Option<time::OffsetDateTime>,
+    pub id: Option<Uuid>,
+}
+
+impl PageCursor {
+    /// `before` pages a newest-first list and `after` an oldest-first one.
+    pub fn new(
+        order: Option<ListOrder>,
+        before: Option<time::OffsetDateTime>,
+        after: Option<time::OffsetDateTime>,
+        id: Option<Uuid>,
+    ) -> Result<Self, String> {
+        let ascending = order.unwrap_or_default().ascending();
+        let at = match (ascending, before, after) {
+            (true, Some(_), _) => return Err("before needs order=newest; use after".into()),
+            (false, _, Some(_)) => return Err("after needs order=oldest; use before".into()),
+            (true, None, at) | (false, at, None) => at,
+        };
+        if id.is_some() && at.is_none() {
+            return Err("cursor_id needs before or after".into());
+        }
+        Ok(Self { ascending, at, id })
+    }
+}
+
 #[derive(Deserialize)]
 pub struct GetItemsQuery {
     pub limit: Option<i64>,
+    /// Deprecated alias for `after` on the per-feed item list.
     #[serde(default, with = "time::serde::iso8601::option")]
     pub since: Option<time::OffsetDateTime>,
     #[serde(default, with = "time::serde::iso8601::option")]
     pub before: Option<time::OffsetDateTime>,
+    #[serde(default, with = "time::serde::iso8601::option")]
+    pub after: Option<time::OffsetDateTime>,
+    pub order: Option<ListOrder>,
+    /// Id of the last row shown, to break ties with the date cursor.
+    pub cursor_id: Option<Uuid>,
     pub unread_only: Option<bool>,
     pub score_min: Option<f32>,
     pub score_max: Option<f32>,
@@ -19,11 +72,28 @@ pub struct GetItemsQuery {
 }
 
 impl GetItemsQuery {
+    /// The page cursor. `since` is the older spelling of `after` and implies
+    /// oldest-first.
+    pub fn cursor(&self) -> Result<PageCursor, String> {
+        match self.since {
+            Some(since) if self.after.is_none() => PageCursor::new(
+                Some(ListOrder::Oldest),
+                self.before,
+                Some(since),
+                self.cursor_id,
+            ),
+            _ => PageCursor::new(self.order, self.before, self.after, self.cursor_id),
+        }
+    }
+
     /// The ranking fields, for a list that keeps a daily top N.
     pub fn ranked(&self) -> GetClustersQuery {
         GetClustersQuery {
             limit: self.limit,
             before: self.before,
+            after: self.after,
+            order: self.order,
+            cursor_id: self.cursor_id,
             unread_only: self.unread_only,
             feed_id: None,
             score_min: self.score_min,
@@ -41,6 +111,11 @@ pub struct GetClustersQuery {
     pub limit: Option<i64>,
     #[serde(default, with = "time::serde::iso8601::option")]
     pub before: Option<time::OffsetDateTime>,
+    #[serde(default, with = "time::serde::iso8601::option")]
+    pub after: Option<time::OffsetDateTime>,
+    pub order: Option<ListOrder>,
+    /// Id of the last story shown, to break ties with the date cursor.
+    pub cursor_id: Option<Uuid>,
     pub unread_only: Option<bool>,
     pub feed_id: Option<Uuid>,
     pub score_min: Option<f32>,
@@ -53,6 +128,12 @@ pub struct GetClustersQuery {
     pub tz: Option<String>,
     /// On the merged list: apply each feed's own filter before merging.
     pub per_feed: Option<bool>,
+}
+
+impl GetClustersQuery {
+    pub fn cursor(&self) -> Result<PageCursor, String> {
+        PageCursor::new(self.order, self.before, self.after, self.cursor_id)
+    }
 }
 
 #[derive(Deserialize)]
@@ -71,6 +152,9 @@ impl GetUnreadCountsQuery {
         GetClustersQuery {
             limit: None,
             before: None,
+            after: None,
+            order: None,
+            cursor_id: None,
             unread_only: Some(true),
             feed_id: None,
             score_min: self.score_min,
@@ -124,6 +208,45 @@ pub struct ItemResponse {
     pub is_read: Option<bool>,
     pub liked: Option<f32>,
     pub prediction_score: Option<f32>,
+}
+
+/// A member row of a story list: the item plus the date its story is paged by.
+pub struct ClusterItemRow {
+    pub id: Uuid,
+    pub feed_ids: Vec<Uuid>,
+    pub title: String,
+    pub link: String,
+    pub content: Option<String>,
+    pub author: Option<String>,
+    pub published_at: Option<time::OffsetDateTime>,
+    pub cluster_id: Option<Uuid>,
+    pub created_at: Option<time::OffsetDateTime>,
+    pub is_read: Option<bool>,
+    pub liked: Option<f32>,
+    pub prediction_score: Option<f32>,
+    pub story_date: Option<time::OffsetDateTime>,
+}
+
+impl ClusterItemRow {
+    pub fn split(self) -> (ItemResponse, Option<time::OffsetDateTime>) {
+        (
+            ItemResponse {
+                id: self.id,
+                feed_ids: self.feed_ids,
+                title: self.title,
+                link: self.link,
+                content: self.content,
+                author: self.author,
+                published_at: self.published_at,
+                cluster_id: self.cluster_id,
+                created_at: self.created_at,
+                is_read: self.is_read,
+                liked: self.liked,
+                prediction_score: self.prediction_score,
+            },
+            self.story_date,
+        )
+    }
 }
 
 #[derive(Serialize)]
@@ -239,7 +362,47 @@ pub struct ErrorResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::UpdateItemStatusRequest;
+    use super::{ListOrder, PageCursor, UpdateItemStatusRequest};
+    use uuid::Uuid;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct OrderQuery {
+        #[serde(default)]
+        order: Option<ListOrder>,
+    }
+
+    #[test]
+    fn list_order_accepts_only_the_two_directions() {
+        let query = |json| serde_json::from_str::<OrderQuery>(json);
+        assert!(query("{}").unwrap().order.is_none());
+        assert_eq!(
+            query(r#"{"order":"oldest"}"#).unwrap().order,
+            Some(ListOrder::Oldest)
+        );
+        assert_eq!(
+            query(r#"{"order":"newest"}"#).unwrap().order,
+            Some(ListOrder::Newest)
+        );
+        assert!(query(r#"{"order":"middle"}"#).is_err());
+    }
+
+    fn at(s: &str) -> Option<time::OffsetDateTime> {
+        Some(time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).unwrap())
+    }
+
+    #[test]
+    fn page_cursor_matches_the_order() {
+        let t = at("2026-01-01T00:00:00Z");
+        let id = Some(Uuid::nil());
+        let oldest = PageCursor::new(Some(ListOrder::Oldest), None, t, id).unwrap();
+        assert_eq!(oldest, PageCursor { ascending: true, at: t, id });
+        let newest = PageCursor::new(None, t, None, None).unwrap();
+        assert_eq!(newest, PageCursor { ascending: false, at: t, id: None });
+        assert!(PageCursor::new(Some(ListOrder::Oldest), t, None, None).is_err());
+        assert!(PageCursor::new(Some(ListOrder::Newest), None, t, None).is_err());
+        assert!(PageCursor::new(None, None, None, id).is_err());
+    }
 
     fn liked(body: &str) -> Option<Option<f32>> {
         serde_json::from_str::<UpdateItemStatusRequest>(body)
