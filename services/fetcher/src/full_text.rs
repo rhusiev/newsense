@@ -7,7 +7,7 @@ use log::{error, info};
 use sqlx::PgPool;
 use std::{
     collections::HashMap,
-    net::IpAddr,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     time::{Duration, Instant},
 };
 use url::Url;
@@ -16,6 +16,9 @@ const POLL_INTERVAL: Duration = Duration::from_secs(60);
 const BATCH_SIZE: i64 = 20;
 /// Only items this new get full text, so switching it on does not crawl the backlog.
 const MAX_ITEM_AGE_HOURS: i32 = 48;
+/// A failed fetch waits this long before another try, so an item gets at most
+/// `MAX_ITEM_AGE_HOURS / RETRY_AFTER_HOURS` attempts.
+const RETRY_AFTER_HOURS: i32 = 6;
 const PER_HOST_GAP: Duration = Duration::from_secs(5);
 const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 5;
@@ -63,14 +66,20 @@ async fn pending_items(pool: &PgPool) -> Result<Vec<Pending>, sqlx::Error> {
         SELECT i.id, i.link
         FROM items i
         WHERE i.created_at > NOW() - make_interval(hours => $1)
-          AND NOT EXISTS (SELECT 1 FROM item_full_texts t WHERE t.item_id = i.id)
+          -- A failed fetch is tried again after a rest, within the age window.
+          AND NOT EXISTS (
+              SELECT 1 FROM item_full_texts t
+              WHERE t.item_id = i.id
+                AND (t.error IS NULL OR t.fetched_at > NOW() - make_interval(hours => $3))
+          )
           AND EXISTS (SELECT 1 FROM feeds f WHERE f.source_id = i.source_id AND f.full_text)
           AND NOT EXISTS (SELECT 1 FROM feeds f WHERE f.source_id = i.source_id AND f.is_public)
         ORDER BY i.created_at
         LIMIT $2
         "#,
         MAX_ITEM_AGE_HOURS,
-        BATCH_SIZE
+        BATCH_SIZE,
+        RETRY_AFTER_HOURS
     )
     .fetch_all(pool)
     .await
@@ -98,7 +107,10 @@ async fn store(
         r#"
         INSERT INTO item_full_texts (item_id, html, text, error)
         VALUES ($1, $2, $3, $4)
-        ON CONFLICT (item_id) DO NOTHING
+        ON CONFLICT (item_id) DO UPDATE
+        SET html = EXCLUDED.html, text = EXCLUDED.text, error = EXCLUDED.error,
+            fetched_at = CURRENT_TIMESTAMP
+        WHERE item_full_texts.error IS NOT NULL
         "#,
         item_id,
         html,
@@ -124,6 +136,9 @@ async fn fetch_politely(
     }
     last_request.insert(host, Instant::now());
     let (final_url, html) = fetch_page(link).await?;
+    if let Some(final_host) = Url::parse(&final_url).ok().and_then(|u| u.host_str().map(str::to_string)) {
+        last_request.insert(final_host, Instant::now());
+    }
     tokio::task::spawn_blocking(move || extract(&html, &final_url)).await?
 }
 
@@ -177,7 +192,7 @@ async fn fetch_page(link: &str) -> Result<(String, String), BoxError> {
 
 /// Refuses hosts that resolve to loopback, private or link-local addresses,
 /// so a feed link cannot make the fetcher read services inside the network.
-/// A host that changes its DNS answer between this check and the request is not caught.
+/// The request is then pinned to a checked address, so a later DNS answer cannot move it.
 async fn ensure_public(url: &Url) -> Result<Vec<std::net::SocketAddr>, BoxError> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err("only http and https are fetched".into());
@@ -193,25 +208,48 @@ async fn ensure_public(url: &Url) -> Result<Vec<std::net::SocketAddr>, BoxError>
 
 fn is_public(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => {
-            !(v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.is_documentation()
-                || v4.octets()[0] == 100 && (v4.octets()[1] & 0b1100_0000) == 64)
-        }
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_public(IpAddr::V4(v4));
-            }
-            !(v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_unique_local()
-                || v6.is_unicast_link_local())
-        }
+        IpAddr::V4(v4) => is_public_v4(v4),
+        IpAddr::V6(v6) => is_public_v6(v6),
     }
+}
+
+/// Special-purpose IPv4 ranges (IANA registry): none of them is a public host.
+fn is_public_v4(v4: Ipv4Addr) -> bool {
+    let [a, b, c, _] = v4.octets();
+    !(a == 0
+        || v4.is_loopback()
+        || v4.is_private()
+        || v4.is_link_local()
+        || v4.is_documentation()
+        || (a == 100 && (b & 0b1100_0000) == 64)
+        || (a == 192 && b == 0 && c == 0)
+        || (a == 198 && (b & 0b1111_1110) == 18)
+        || a >= 224)
+}
+
+/// IPv6 forms that carry an IPv4 address are judged by that address; NAT64 and
+/// 6to4 gateways would otherwise reach private IPv4 hosts.
+fn is_public_v6(v6: Ipv6Addr) -> bool {
+    let s = v6.segments();
+    if let Some(v4) = v6.to_ipv4() {
+        // `::a.b.c.d` (compatible) and `::ffff:a.b.c.d` (mapped).
+        return !v6.is_loopback() && !v6.is_unspecified() && is_public_v4(v4);
+    }
+    if s[0] == 0x64 && s[1] == 0xff9b && s[2..6] == [0; 4] {
+        let o = v6.octets();
+        return is_public_v4(Ipv4Addr::new(o[12], o[13], o[14], o[15]));
+    }
+    if s[0] == 0x2002 {
+        let o = v6.octets();
+        return is_public_v4(Ipv4Addr::new(o[2], o[3], o[4], o[5]));
+    }
+    !(v6.is_multicast()
+        || v6.is_unique_local()
+        || v6.is_unicast_link_local()
+        // Teredo, discard-only and documentation prefixes.
+        || (s[0] == 0x2001 && s[1] == 0)
+        || (s[0] == 0x100 && s[1..4] == [0; 3])
+        || (s[0] == 0x2001 && s[1] == 0xdb8))
 }
 
 /// Keeps the readable part of the page. Image addresses move from `src` to
@@ -260,10 +298,31 @@ mod tests {
             "::1",
             "fd00::1",
             "::ffff:10.0.0.1",
+            "0.1.2.3",
+            "192.0.0.8",
+            "198.18.0.1",
+            "224.0.0.1",
+            "240.0.0.1",
+            "255.255.255.255",
+            "::10.0.0.1",
+            "64:ff9b::10.0.0.1",
+            "64:ff9b::7f00:1",
+            "2002:0a00:0001::1",
+            "2002:7f00:0001::1",
+            "2001:0:4136:e378::1",
+            "2001:db8::1",
+            "ff02::1",
+            "fe80::1",
         ] {
             assert!(!is_public(ip.parse().unwrap()), "{ip}");
         }
-        for ip in ["1.1.1.1", "2606:4700:4700::1111"] {
+        for ip in [
+            "1.1.1.1",
+            "2606:4700:4700::1111",
+            "64:ff9b::1.1.1.1",
+            "2002:0101:0101::1",
+            "::ffff:8.8.8.8",
+        ] {
             assert!(is_public(ip.parse().unwrap()), "{ip}");
         }
     }

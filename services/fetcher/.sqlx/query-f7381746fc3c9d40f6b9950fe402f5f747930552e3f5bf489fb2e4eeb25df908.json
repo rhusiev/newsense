@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT i.id, i.link\n        FROM items i\n        WHERE i.created_at > NOW() - make_interval(hours => $1)\n          -- A failed fetch is tried again after a rest, within the age window.\n          AND NOT EXISTS (\n              SELECT 1 FROM item_full_texts t\n              WHERE t.item_id = i.id\n                AND (t.error IS NULL OR t.fetched_at > NOW() - make_interval(hours => $3))\n          )\n          AND EXISTS (SELECT 1 FROM feeds f WHERE f.source_id = i.source_id AND f.full_text)\n          AND NOT EXISTS (SELECT 1 FROM feeds f WHERE f.source_id = i.source_id AND f.is_public)\n        ORDER BY i.created_at\n        LIMIT $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "link",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "f7381746fc3c9d40f6b9950fe402f5f747930552e3f5bf489fb2e4eeb25df908"
+}

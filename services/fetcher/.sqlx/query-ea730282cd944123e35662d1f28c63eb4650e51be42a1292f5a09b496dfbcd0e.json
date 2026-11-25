@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO item_full_texts (item_id, html, text, error)\n        VALUES ($1, $2, $3, $4)\n        ON CONFLICT (item_id) DO UPDATE\n        SET html = EXCLUDED.html, text = EXCLUDED.text, error = EXCLUDED.error,\n            fetched_at = CURRENT_TIMESTAMP\n        WHERE item_full_texts.error IS NOT NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ea730282cd944123e35662d1f28c63eb4650e51be42a1292f5a09b496dfbcd0e"
+}
