@@ -81,12 +81,18 @@ backfill before threads regroup them.
 Threads are soft. Each cluster stores `thread_confidence` and one
 `thread_alternative_id`. A story with no confident pair stays a singleton.
 
-The chosen setup is `THREAD_KNN=10` with `THREAD_LLM_ENABLED=1`: the worker
+With `THREAD_LLM_ENABLED=1` (off by default) and `THREAD_KNN=10`, the worker
 asks the configured LLM whether each candidate pair follows one storyline and
-joins pairs scoring at least `THREAD_LLM_THRESHOLD`. Verdicts are cached in
+joins pairs scoring at least `THREAD_LLM_THRESHOLD`. Only headlines and feed
+summaries of articles from public feeds are sent. Full text never is, because
+it exists only for private feeds. A pair with a story that has no public
+article is not sent and joins by the cosine rule. Verdicts are cached in
 `thread_pair_scores` per pair, model and text hash, so reruns do not pay twice.
-`THREAD_LLM_MAX_CALLS` caps one run and `THREAD_LLM_DAILY_CALLS` caps one day;
-each side of a pair is shortened to `THREAD_LLM_MAX_CHARS` before it is sent.
+`THREAD_LLM_MAX_CALLS` caps one run and `THREAD_LLM_DAILY_CALLS` caps one day.
+Every request counts toward the daily cap, including failed ones
+(`thread_llm_calls`). Each side of a pair is shortened to
+`THREAD_LLM_MAX_CHARS` before it is sent. `LLM_REASONING` and
+`LLM_PROVIDER_ROUTING` must be JSON objects; the worker does not start otherwise.
 A local quantized ONNX scorer can be used
 instead by setting `THREAD_PAIR_MODEL` and disabling the LLM verifier; its
 inference is batched by `THREAD_PAIR_BATCH` (default 64). `THREAD_TWO_HOP=1`

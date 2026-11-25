@@ -39,12 +39,6 @@ def _source_hash(title_a: str, body_a: str, title_b: str, body_b: str) -> str:
     return hashlib.sha256(source.encode()).hexdigest()
 
 
-def _provider() -> dict | None:
-    if not LLM_PROVIDER_ROUTING:
-        return None
-    return json.loads(LLM_PROVIDER_ROUTING)
-
-
 async def _call(client: httpx.AsyncClient, pair: tuple, texts: dict, model: str) -> float | None:
     a, b = pair
     title_a, body_a = texts[a]
@@ -62,11 +56,10 @@ async def _call(client: httpx.AsyncClient, pair: tuple, texts: dict, model: str)
         "temperature": 0,
         "max_tokens": 200,
     }
-    provider = _provider()
-    if provider:
-        payload["provider"] = provider
+    if LLM_PROVIDER_ROUTING:
+        payload["provider"] = LLM_PROVIDER_ROUTING
     if LLM_REASONING:
-        payload["reasoning"] = json.loads(LLM_REASONING)
+        payload["reasoning"] = LLM_REASONING
     try:
         response = await client.post(
             f"{LLM_BASE_URL.rstrip('/')}/chat/completions",
@@ -98,8 +91,9 @@ async def score_pairs(conn, pairs: list[tuple], texts: dict) -> dict[tuple, floa
         [pid for pair in pairs for pid in pair],
     )
     cache = {(row["story_a"], row["story_b"]): row for row in rows}
+    # Every request counts, so a failing provider cannot be called again each run.
     today = await conn.fetchval(
-        "SELECT COUNT(*) FROM thread_pair_scores WHERE created_at >= date_trunc('day', now())"
+        "SELECT COUNT(*) FROM thread_llm_calls WHERE created_at >= date_trunc('day', now())"
     )
     remaining = max(0, THREAD_LLM_DAILY_CALLS - int(today))
     out: dict[tuple, float] = {}
@@ -128,6 +122,10 @@ async def score_pairs(conn, pairs: list[tuple], texts: dict) -> dict[tuple, floa
         results = await asyncio.gather(*(limited(item) for item in pending))
 
     async with conn.transaction():
+        await conn.executemany(
+            "INSERT INTO thread_llm_calls (success) VALUES ($1)",
+            [(prob is not None,) for _, prob, _ in results],
+        )
         for pair, prob, digest in results:
             if prob is None:
                 row = cache.get(pair)

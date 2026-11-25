@@ -1,4 +1,20 @@
+import json
 import os
+
+
+def _json_object_env(name: str) -> dict | None:
+    """Parse an optional JSON object from the environment, failing at startup."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{name} is not valid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be a JSON object")
+    return value
+
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgres://user:pass@localhost:5432/authdb")
 VALKEY_URL = os.getenv("VALKEY_URL", "redis://localhost:6379")
@@ -30,13 +46,14 @@ REPLAY_BUFFER_SIZE = 64
 MIN_TRAINING_SAMPLES = 5
 
 # Story threads: Leiden communities in a kNN graph of full-text embeddings.
-# The chosen production setup is top-10 candidates verified by the storyline LLM.
 THREAD_KNN = int(os.getenv("THREAD_KNN", "10"))
 THREAD_EMBEDDING_MIN = 0.86
 THREAD_RESOLUTION = float(os.getenv("THREAD_RESOLUTION", "2"))
 THREAD_GAP_DAYS = 7
 # The LLM verifier decides same-storyline pairs; cosine only proposes candidates.
-THREAD_LLM_ENABLED = os.getenv("THREAD_LLM_ENABLED", "1").lower() in (
+# Off by default: it sends headlines to the instance LLM. Only stories with an
+# article from a public feed are sent; the others keep the cosine rule.
+THREAD_LLM_ENABLED = os.getenv("THREAD_LLM_ENABLED", "0").lower() in (
     "1", "true", "yes"
 )
 THREAD_LLM_THRESHOLD = float(os.getenv("THREAD_LLM_THRESHOLD", "0.7"))
@@ -66,8 +83,8 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "")
 # Optional JSON provider routing, e.g. {"data_collection":"deny","zdr":true} for OpenRouter.
-LLM_PROVIDER_ROUTING = os.getenv("LLM_PROVIDER_ROUTING", "")
-LLM_SUMMARIES_ENABLED = os.getenv("LLM_SUMMARIES_ENABLED", "1").lower() in ("1", "true", "yes")
+LLM_PROVIDER_ROUTING = _json_object_env("LLM_PROVIDER_ROUTING")
+LLM_SUMMARIES_ENABLED = os.getenv("LLM_SUMMARIES_ENABLED", "0").lower() in ("1", "true", "yes")
 LLM_SUMMARY_INTERVAL_MINUTES = int(os.getenv("LLM_SUMMARY_INTERVAL_MINUTES", "5"))
 LLM_SUMMARY_BATCH = int(os.getenv("LLM_SUMMARY_BATCH", "5"))
 LLM_SUMMARY_MAX_WORDS = 180
@@ -77,4 +94,4 @@ LLM_SUMMARY_SETTLE_HOURS = 6
 LLM_SUMMARY_MAX_ATTEMPTS = 3
 LLM_REQUEST_TIMEOUT_S = 90.0
 # Optional JSON object sent as the provider's reasoning field, e.g. {"effort":"low"}.
-LLM_REASONING = os.getenv("LLM_REASONING", "").strip()
+LLM_REASONING = _json_object_env("LLM_REASONING")

@@ -249,6 +249,14 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_llm_calls_user_day ON llm_calls(user_id, created_at);
+
+-- Each thread-verifier request, successful or not, for the daily cap.
+CREATE TABLE IF NOT EXISTS thread_llm_calls (
+    id BIGSERIAL PRIMARY KEY,
+    success BOOLEAN NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_thread_llm_calls_created ON thread_llm_calls(created_at);
 CREATE INDEX IF NOT EXISTS idx_story_summaries_pending
     ON story_summaries(updated_at) WHERE summary IS NULL;
 
